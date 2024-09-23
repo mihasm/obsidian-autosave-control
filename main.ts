@@ -13,6 +13,7 @@ export default class CustomFileLockPlugin extends Plugin {
   originalVaultModify: (file: TFile, data: string) => Promise<void>;
   lockedFiles: Map<string, { file: TFile; content: string; timeoutId: number }> = new Map();
   isManualSave: boolean = false;
+  previousActiveFilePath: string | null = null;
 
   async onload() {
     console.log("Plugin loaded.");
@@ -29,58 +30,78 @@ export default class CustomFileLockPlugin extends Plugin {
     // Override 'modify' method
     this.app.vault.modify = async (file: TFile, data: string): Promise<void> => {
       const filePath = file.path;
-      if (this.lockedFiles.has(filePath)) {
-        console.log(`Preventing modification of locked file: ${filePath}`);
-        // Do nothing, simulate successful modification
-        return;
-      } else {
-        // Call the original 'modify' method
+      if (this.isManualSave) {
+        // Allow manual saves to proceed
         return await this.originalVaultModify(file, data);
       }
+
+      if (this.lockedFiles.has(filePath)) {
+        console.log(`Preventing modification of locked file: ${filePath}`);
+        // Update the content in memory
+        const lockedFile = this.lockedFiles.get(filePath)!;
+        lockedFile.content = data;
+
+        // Reset the timeout
+        clearTimeout(lockedFile.timeoutId);
+        lockedFile.timeoutId = window.setTimeout(() => {
+          this.unlockAndSaveFile(filePath);
+        }, this.settings.saveInterval * 1000);
+      } else {
+        // First modification to this file, lock it and store content
+        console.log(`Locking file: ${filePath}`);
+        const timeoutId = window.setTimeout(() => {
+          this.unlockAndSaveFile(filePath);
+        }, this.settings.saveInterval * 1000);
+
+        this.lockedFiles.set(filePath, { file, content: data, timeoutId });
+      }
+
+      // Do not save to disk immediately
+      return;
     };
 
-    // Listen for file modifications
-    this.registerEvent(this.app.vault.on('modify', (file: TFile) => {
-      (async () => {
-        if (this.isManualSave) {
-          this.isManualSave = false;
-          return;
+    // Listen for file open events to initialize content for open files
+    this.registerEvent(
+      this.app.workspace.on('file-open', async (file: TFile | null) => {
+        if (file && this.lockedFiles.has(file.path)) {
+          // Update content from editor if available
+          const content = await this.getFileContent(file);
+          const lockedFile = this.lockedFiles.get(file.path)!;
+          lockedFile.content = content;
         }
+      })
+    );
 
-        console.log(`File ${file.name} is being modified.`);
+    // Track active file changes
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => {
+        if (leaf && leaf.view instanceof MarkdownView) {
+          const file = leaf.view.file;
+          if (file) {
+            const currentFilePath = file.path;
+            const previousFilePath = this.previousActiveFilePath;
 
-        const filePath = file.path;
+            // If there's a previous file, and it's different from the current
+            if (previousFilePath && previousFilePath !== currentFilePath) {
+              // Check if the previous file is locked
+              if (this.lockedFiles.has(previousFilePath)) {
+                // Forcefully save and unlock the previous file
+                this.unlockAndSaveFile(previousFilePath);
+              }
+            }
 
-        if (this.lockedFiles.has(filePath)) {
-          // Reset the timeout
-          const lockedFile = this.lockedFiles.get(filePath);
-          if (lockedFile) {
-            clearTimeout(lockedFile.timeoutId);
-            // Set new timeout
-            lockedFile.timeoutId = window.setTimeout(() => {
-              this.unlockAndSaveFile(filePath);
-            }, this.settings.saveInterval * 1000);
-          }
-        } else {
-          // Lock the file
-          const timeoutId = window.setTimeout(() => {
-            this.unlockAndSaveFile(filePath);
-          }, this.settings.saveInterval * 1000);
-
-          // Initialize content
-          try {
-            const content = await this.getFileContent(file);
-            // Add to lockedFiles
-            this.lockedFiles.set(filePath, { file, content, timeoutId });
-          } catch (err) {
-            console.error(`Failed to get content for file: ${filePath}`, err);
+            // Update the previous active file path
+            this.previousActiveFilePath = currentFilePath;
           }
         }
-      })();
-    }));
+      })
+    );
 
-    // Update content periodically
-    this.registerInterval(window.setInterval(() => this.updateContent(), 1000));
+    // Initialize previous active file path
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (activeView && activeView.file) {
+      this.previousActiveFilePath = activeView.file.path;
+    }
   }
 
   async getFileContent(file: TFile): Promise<string> {
@@ -94,22 +115,6 @@ export default class CustomFileLockPlugin extends Plugin {
     }
     // If not open in an editor, read from cache
     return await this.app.vault.cachedRead(file);
-  }
-
-  async updateContent() {
-    const leaves = this.app.workspace.getLeavesOfType('markdown');
-    for (const leaf of leaves) {
-      const view = leaf.view as MarkdownView;
-      if (view && view.file) {
-        const filePath = view.file.path;
-        if (this.lockedFiles.has(filePath)) {
-          const lockedFile = this.lockedFiles.get(filePath);
-          if (lockedFile) {
-            lockedFile.content = view.editor.getValue();
-          }
-        }
-      }
-    }
   }
 
   async unlockAndSaveFile(filePath: string) {
@@ -136,6 +141,9 @@ export default class CustomFileLockPlugin extends Plugin {
     } catch (err) {
       console.error(`Failed to save file: ${filePath}`, err);
     }
+
+    // Reset manual save flag
+    this.isManualSave = false;
   }
 
   async loadSettings() {
@@ -186,25 +194,29 @@ class CustomFileLockSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Save Interval')
-      .setDesc('The period (in seconds) during which file changes are kept in memory before being saved to disk. Must be between 1 and 3600 seconds.')
-      .addText(text => text
-        .setPlaceholder('Enter save interval in seconds')
-        .setValue(this.plugin.settings.saveInterval.toString())
-        .onChange(async (value) => {
-          let newValue = parseInt(value);
-          if (isNaN(newValue)) {
-            newValue = DEFAULT_SETTINGS.saveInterval;
-          }
-          if (newValue < 1) newValue = 1;
-          if (newValue > 3600) newValue = 3600;
-          this.plugin.settings.saveInterval = newValue;
-          console.log(`Save interval set to: ${newValue} seconds`);
+      .setDesc(
+        'The period (in seconds) during which file changes are kept in memory before being saved to disk. Must be between 1 and 3600 seconds.'
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder('Enter save interval in seconds')
+          .setValue(this.plugin.settings.saveInterval.toString())
+          .onChange(async (value) => {
+            let newValue = parseInt(value);
+            if (isNaN(newValue)) {
+              newValue = DEFAULT_SETTINGS.saveInterval;
+            }
+            if (newValue < 1) newValue = 1;
+            if (newValue > 3600) newValue = 3600;
+            this.plugin.settings.saveInterval = newValue;
+            console.log(`Save interval set to: ${newValue} seconds`);
 
-          // Save the settings
-          await this.plugin.saveSettings();
+            // Save the settings
+            await this.plugin.saveSettings();
 
-          // Update existing timeouts to use new interval
-          this.plugin.updateTimeouts();
-        }));
+            // Update existing timeouts to use new interval
+            this.plugin.updateTimeouts();
+          })
+      );
   }
 }
