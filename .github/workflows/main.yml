@@ -19,7 +19,7 @@ jobs:
         run: |
           npm install
           npm run build # Replace with your actual build command
-          zip -r obsidian-autosave-control.zip main.js manifest.json styles.css
+          zip -r obsidian-autosave-control.zip main.js manifest.json
 
       - name: Create GitHub Release
         id: create_release
@@ -27,9 +27,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}    # Use the tag that was pushed as the version
-          release_name: ${{ github.ref }} # Same as the version
-          body: "Automatically created release for tag ${{ github.ref }}."
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          body: "Automatically created release for tag ${{ github.ref_name }}."
           draft: false
           prerelease: false
 
