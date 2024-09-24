@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'  # This triggers the workflow when you push a tag starting with "v"
+  workflow_dispatch:
 
 jobs:
   release:
