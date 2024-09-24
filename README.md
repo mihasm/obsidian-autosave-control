@@ -1,5 +1,7 @@
 # Obsidian Autosave Control
 
+⚠️ **WARNING** ⚠️: Please use this plugin with caution only on vaults with backed up data because it is in **alpha release**!
+
 ## Introduction
 
 The **Obsidian Autosave Control** is an Obsidian plugin designed to manage file saving behavior by temporarily deferring file saves during editing. It provides control over when files are saved to disk, helping to prevent issues related to rapid or unintended saves, such as conflicts with external synchronization services or version control systems.
@@ -16,12 +18,10 @@ The Custom File Lock Plugin addresses these issues by introducing a controlled s
 
 ## Features
 
-- **User-Configurable Save Interval**: Set the period during which file changes are kept in memory before being saved to disk, ranging from 1 second to 3600 seconds (1 hour).
-- **Controlled Saving**: Prevents immediate saves by intercepting the file modification method and deferring the actual save operation.
+- **User-Configurable Save Interval**: Set the period during which file changes are kept in memory before being saved to disk, ranging from 1 second to 3600 seconds (1 hour). Default: 10 seconds.
 - **Lock Period**: Implements a lock period during which changes are accumulated but not saved to disk.
-- **Multiple File Handling**: Supports editing multiple files simultaneously, each with its own lock period and save timing.
 - **Automatic Unlock and Save**: After the lock period expires, the plugin automatically saves the changes to disk.
-- **Data Integrity**: Ensures that the latest content is saved, preventing data loss or overwriting issues.
+- **Multiple File Handling**: Supports editing multiple files simultaneously, each with its own lock period and save timing.
 
 ## Target Operating Systems
 
@@ -29,39 +29,59 @@ The Custom File Lock Plugin is designed to be platform-independent.
 
 ## Installation
 
-### Steps
+### Option 1: Install Using Pre-built Release
 
-1. **Download the Plugin**
+If you don't want to manually build the plugin, you can use the pre-built version from the latest release.
 
+1. **Download the Pre-built Release**
+   - Go to the [Releases page](https://github.com/mihasm/custom-file-lock-plugin/releases) of this repository.
+   - Download the latest version of the plugin (`obsidian-autosave-control.zip`).
+
+2. **Install the Plugin in Obsidian**
+   - Extract the contents of the `.zip` file.
+   - Create a folder named `obsidian-autosave-control` in your Obsidian vault's `.obsidian/plugins/` directory.
+   - Copy the extracted files (`main.js`, `manifest.json`) into the `obsidian-autosave-control` folder.
+
+3. **Enable the Plugin**
+   - Open Obsidian.
+   - Go to **Settings** > **Community plugins**.
+   - Ensure that **Safe mode** is off.
+   - Click on **Reload plugins**.
+   - Find **Obsidian Autosave Control** in the list and enable it.
+
+### Option 2: Build the Plugin Manually
+
+For users who want to build the plugin from the source, follow these steps:
+
+1. **Clone the Repository or Download the Source Code**
    - Clone the repository or download the source code as a ZIP file.
 
-2. **Build the Plugin**
-
+2. **Install Dependencies**
    - Navigate to the plugin's directory in your terminal.
-   - Install the dependencies:
+   - Run the following command to install dependencies:
 
      ```bash
      npm install
      ```
 
-   - Build the plugin:
+3. **Build the Plugin**
+   - Run the following command to build the plugin:
 
      ```bash
      npm run build
      ```
 
-3. **Install the Plugin in Obsidian**
-
+4. **Install the Plugin in Obsidian**
    - Create a folder named `obsidian-autosave-control` in your Obsidian vault's `.obsidian/plugins/` directory.
    - Copy the built files (`main.js`, `manifest.json`) into the `obsidian-autosave-control` folder.
 
-4. **Enable the Plugin**
-
+5. **Enable the Plugin**
    - Open Obsidian.
    - Go to **Settings** > **Community plugins**.
    - Ensure that **Safe mode** is off.
    - Click on **Reload plugins**.
-   - Find **Custom File Lock Plugin** in the list and enable it.
+   - Find **Obsidian Autosave Control** in the list and enable it.
+
 
 ## Usage
 
@@ -73,11 +93,9 @@ Once the plugin is installed and enabled, it operates automatically.
 - **Deferring Saves**: Obsidian is prevented from saving the file immediately. Changes are kept in memory.
 - **Automatic Saving**: After the user-defined lock period, the plugin automatically saves the file.
 - **Continuous Editing**: If you continue editing, the lock period resets, and the file is saved after the new interval since the last modification.
-
-### Handling Multiple Files
-
-- The plugin supports editing multiple files at the same time.
-- Each file has its own lock period and is saved independently.
+- **Exiting Obsidian**: If you exit Obsidian, the plugin intercepts the event and saves all locked files before letting Obsidian quit.
+- **Closing Tabs**: If you close the editor tab of a file, the plugin unlocks and saves the file immediately.
+- **Switching Files**: If you switch the editor tab of a file to another file, the plugin unlocks and saves the file immediately.
 
 ## Configuration
 
@@ -86,17 +104,9 @@ Once the plugin is installed and enabled, it operates automatically.
 1. Open Obsidian.
 2. Go to **Settings** > **Custom File Lock**.
 
-### Setting the Save Interval
-
 - **Save Interval**: The period (in seconds) during which file changes are kept in memory before being saved to disk.
 - **Range**: Must be between **1 second** and **3600 seconds** (1 hour).
 - **Default**: 10 seconds.
-
-#### Steps to Change the Save Interval
-
-1. In the **Custom File Lock** settings tab, locate the **Save Interval** setting.
-2. Enter a value between 1 and 3600 in the text input.
-3. The new save interval takes effect immediately.
 
 ### Immediate Effect
 
@@ -108,6 +118,7 @@ Once the plugin is installed and enabled, it operates automatically.
 - **Data in Memory**: Changes are held in memory during the lock period. In the unlikely event of a crash, unsaved changes during the lock period may be lost.
 - **No Conflict Resolution**: The plugin does not handle merge conflicts or synchronization issues beyond controlling the save timing.
 - **Obsidian Updates**: Future updates to Obsidian's API may affect the plugin's functionality.
+- ⚠️ **WARNING** ⚠️: Please use this plugin with caution only on vaults with backed up data because it is in **alpha release**!
 
 ## Contributing
 
@@ -136,10 +147,6 @@ This will watch for changes and rebuild the plugin automatically.
 ## Link the Plugin for Testing
 
 Create a symbolic link from the plugin's build directory to your Obsidian vault's `.obsidian/plugins/` directory.
-
-## Testing
-
-Enable the plugin in Obsidian and test your changes.
 
 ## License
 
