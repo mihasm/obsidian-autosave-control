@@ -102,6 +102,33 @@ export default class CustomFileLockPlugin extends Plugin {
     if (activeView && activeView.file) {
       this.previousActiveFilePath = activeView.file.path;
     }
+
+    // Handle window close and quit events
+    this.registerEvent(this.app.workspace.on('quit', () => {
+      console.log("App quit event detected. Saving all locked files.");
+      this.saveAllLockedFiles();
+    }));
+
+    this.registerEvent(this.app.workspace.on('window-close', () => {
+      console.log("Window close event detected. Saving all locked files.");
+      this.saveAllLockedFiles();
+    }));
+
+    // Register file close (active-leaf-change) event listener
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => {
+        const previousFilePath = this.previousActiveFilePath;
+
+        if (previousFilePath && this.lockedFiles.has(previousFilePath)) {
+          console.log(`File close detected for: ${previousFilePath}. Saving before closing.`);
+          this.unlockAndSaveFile(previousFilePath);
+        }
+
+        if (leaf && leaf.view instanceof MarkdownView) {
+          this.previousActiveFilePath = leaf.view.file?.path ?? null;
+        }
+      })
+    );
   }
 
   async getFileContent(file: TFile): Promise<string> {
@@ -146,6 +173,13 @@ export default class CustomFileLockPlugin extends Plugin {
     this.isManualSave = false;
   }
 
+  async saveAllLockedFiles() {
+    console.log("Saving all locked files before closing.");
+    for (const filePath of this.lockedFiles.keys()) {
+      await this.unlockAndSaveFile(filePath);
+    }
+  }
+
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
@@ -174,6 +208,9 @@ export default class CustomFileLockPlugin extends Plugin {
     this.lockedFiles.forEach((lockedFile) => {
       clearTimeout(lockedFile.timeoutId);
     });
+
+    // Save all locked files on unload
+    this.saveAllLockedFiles();
   }
 }
 
