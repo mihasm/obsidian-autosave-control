@@ -1,22 +1,8 @@
-# Custom File Lock Plugin for Obsidian
-
-## Table of Contents
-
-- [Introduction](#introduction)
-- [Problem Statement](#problem-statement)
-- [Features](#features)
-- [How It Works](#how-it-works)
-- [Target Operating Systems](#target-operating-systems)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Configuration](#configuration)
-- [Limitations](#limitations)
-- [Contributing](#contributing)
-- [License](#license)
+# Obsidian Autosave Control
 
 ## Introduction
 
-The **Custom File Lock Plugin** is an Obsidian plugin designed to manage file saving behavior by temporarily deferring file saves during editing. It provides control over when files are saved to disk, helping to prevent issues related to rapid or unintended saves, such as conflicts with external synchronization services or version control systems.
+The **Obsidian Autosave Control** is an Obsidian plugin designed to manage file saving behavior by temporarily deferring file saves during editing. It provides control over when files are saved to disk, helping to prevent issues related to rapid or unintended saves, such as conflicts with external synchronization services or version control systems.
 
 ## Problem Statement
 
@@ -37,34 +23,11 @@ The Custom File Lock Plugin addresses these issues by introducing a controlled s
 - **Automatic Unlock and Save**: After the lock period expires, the plugin automatically saves the changes to disk.
 - **Data Integrity**: Ensures that the latest content is saved, preventing data loss or overwriting issues.
 
-## How It Works
-
-The plugin intercepts Obsidian's file modification process and introduces a "lock" period during which files are not saved to disk. Instead, changes are kept in memory, and the plugin saves the file after the specified interval or when certain conditions are met.
-
-### Technical Details
-
-- **Overriding `app.vault.modify`**: The plugin overrides the `modify` method of Obsidian's `Vault` class to control file saving.
-- **Locked Files Map**: Maintains a map of locked files, tracking their content and associated timers.
-- **Content Updates**: Periodically updates the content of locked files by reading from the active editor.
-- **Asynchronous Operations**: Handles asynchronous methods properly to ensure smooth operation without blocking the main thread.
-- **User Interface**: Provides a settings tab in Obsidian's settings where users can adjust the save interval.
-- **Event Handling**: Listens to Obsidian's events to manage file modifications and editor interactions effectively.
-
 ## Target Operating Systems
 
-The Custom File Lock Plugin is designed to be **platform-independent** and works on any operating system that supports Obsidian, including:
-
-- **Windows**
-- **macOS**
-- **Linux**
-
-By avoiding platform-specific file system manipulations (such as changing file permissions), the plugin ensures compatibility across all supported operating systems.
+The Custom File Lock Plugin is designed to be platform-independent.
 
 ## Installation
-
-### Prerequisites
-
-- **Obsidian**: Make sure you have Obsidian installed. You can download it from the [official website](https://obsidian.md/).
 
 ### Steps
 
@@ -89,8 +52,8 @@ By avoiding platform-specific file system manipulations (such as changing file p
 
 3. **Install the Plugin in Obsidian**
 
-   - Create a folder named `custom-file-lock-plugin` in your Obsidian vault's `.obsidian/plugins/` directory.
-   - Copy the built files (`main.js`, `manifest.json`, and `styles.css` if any) into the `custom-file-lock-plugin` folder.
+   - Create a folder named `obsidian-autosave-control` in your Obsidian vault's `.obsidian/plugins/` directory.
+   - Copy the built files (`main.js`, `manifest.json`) into the `obsidian-autosave-control` folder.
 
 4. **Enable the Plugin**
 
