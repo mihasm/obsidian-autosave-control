@@ -1,0 +1,44 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # This triggers the workflow when you push a tag starting with "v"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Run your build step to generate files
+      - name: Build Plugin
+        run: |
+          npm install
+          npm run build # Replace with your actual build command
+          zip -r obsidian-autosave-control.zip main.js manifest.json styles.css
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}    # Use the tag that was pushed as the version
+          release_name: ${{ github.ref }} # Same as the version
+          body: "Automatically created release for tag ${{ github.ref }}."
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./obsidian-autosave-control.zip  # Path to the .zip file
+          asset_name: obsidian-autosave-control.zip    # Name of the file in the release
+          asset_content_type: application/zip
+
