@@ -14,7 +14,7 @@ By default, Obsidian saves changes to files immediately as you type. While this 
 - **Performance Issues**: Saving large files or files on network drives can introduce latency or performance degradation when saves occur too frequently.
 - **Data Integrity Concerns**: Immediate saves may risk saving unintended or incomplete changes, especially when experimenting with content that you may not wish to keep.
 
-The Custom File Lock Plugin addresses these issues by introducing a controlled save mechanism, allowing you to define when and how often files are saved.
+The Obsidian Autosave Control addresses these issues by introducing a controlled save mechanism, allowing you to define when and how often files are saved.
 
 ## Features
 
@@ -25,7 +25,7 @@ The Custom File Lock Plugin addresses these issues by introducing a controlled s
 
 ## Target Operating Systems
 
-The Custom File Lock Plugin is designed to be platform-independent.
+The Obsidian Autosave Control is designed to be platform-independent.
 
 ## Installation
 
@@ -34,7 +34,7 @@ The Custom File Lock Plugin is designed to be platform-independent.
 If you don't want to manually build the plugin, you can use the pre-built version from the latest release.
 
 1. **Download the Pre-built Release**
-   - Go to the [Releases page](https://github.com/mihasm/custom-file-lock-plugin/releases) of this repository.
+   - Go to the [Releases page](https://github.com/mihasm/obsidian-autosave-control/releases) of this repository.
    - Download the latest version of the plugin (`obsidian-autosave-control.zip`).
 
 2. **Install the Plugin in Obsidian**
@@ -102,7 +102,7 @@ Once the plugin is installed and enabled, it operates automatically.
 ### Accessing the Settings
 
 1. Open Obsidian.
-2. Go to **Settings** > **Custom File Lock**.
+2. Go to **Settings** > **Obsidian Autosave Control**.
 
 - **Save Interval**: The period (in seconds) during which file changes are kept in memory before being saved to disk.
 - **Range**: Must be between **1 second** and **3600 seconds** (1 hour).
@@ -122,14 +122,14 @@ Once the plugin is installed and enabled, it operates automatically.
 
 ## Contributing
 
-Contributions are welcome! If you have ideas for improvements or encounter any issues, please open an issue or submit a pull request on the [GitHub repository](https://github.com/mihasm/custom-file-lock-plugin).
+Contributions are welcome! If you have ideas for improvements or encounter any issues, please open an issue or submit a pull request on the [GitHub repository](https://github.com/mihasm/obsidian-autosave-control).
 
 ### Development Setup
 
 1. **Clone the Repository**
 
    ```
-   git clone https://github.com/yourusername/custom-file-lock-plugin.git
+   git clone https://github.com/mihasm/obsidian-autosave-control.git
    ```
 
 2. **Install Dependencies**
@@ -181,7 +181,7 @@ The plugin should be compatible with most other plugins. However, since it overr
 To disable the plugin:
 
 1. Go to **Settings** > **Community plugins**.
-2. Find **Custom File Lock Plugin** in the list.
+2. Find **Obsidian Autosave Control** in the list.
 3. Click on the toggle to disable it.
 
 ## Support
