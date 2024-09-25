@@ -22,6 +22,7 @@ The Obsidian Autosave Control addresses these issues by introducing a controlled
 - **Lock Period**: Implements a lock period during which changes are accumulated but not saved to disk.
 - **Automatic Unlock and Save**: After the lock period expires, the plugin automatically saves the changes to disk.
 - **Multiple File Handling**: Supports editing multiple files simultaneously, each with its own lock period and save timing.
+- **Status Bar Icon**: Displays a status icon in the Obsidian interface. The icon is blue when a file is locked (i.e., not yet saved) and turns green once all files are saved. The icon's tooltip provides information about the current save state.
 
 ## Target Operating Systems
 
@@ -96,6 +97,8 @@ Once the plugin is installed and enabled, it operates automatically.
 - **Exiting Obsidian**: If you exit Obsidian, the plugin intercepts the event and saves all locked files before letting Obsidian quit.
 - **Closing Tabs**: If you close the editor tab of a file, the plugin unlocks and saves the file immediately.
 - **Switching Files**: If you switch the editor tab of a file to another file, the plugin unlocks and saves the file immediately.
+- **Renaming Files**: If you rename a file which is currently under lock, the plugin detects the action and makes sure that the content is being stored to the new file name.
+- **Status Indicator**: A status icon is displayed in the status bar of the Obsidian interface. When files are locked and unsaved, the icon turns blue, with a tooltip saying "Changes pending save." Once all files are saved, the icon turns green, and the tooltip reads "All changes saved."
 
 ## Configuration
 

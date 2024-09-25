@@ -1,28 +1,32 @@
 import { App, Plugin, TFile, MarkdownView, PluginSettingTab, Setting } from 'obsidian';
 
-interface CustomFileLockSettings {
+interface ObsidianAutosaveControlSettings {
   saveInterval: number;
 }
 
-const DEFAULT_SETTINGS: CustomFileLockSettings = {
+const DEFAULT_SETTINGS: ObsidianAutosaveControlSettings = {
   saveInterval: 10, // default to 10 seconds
 };
 
-export default class CustomFileLockPlugin extends Plugin {
-  settings: CustomFileLockSettings;
+export default class ObsidianAutosaveControlPlugin extends Plugin {
+  settings: ObsidianAutosaveControlSettings;
   originalVaultModify: (file: TFile, data: string) => Promise<void>;
   lockedFiles: Map<string, { file: TFile; content: string; timeoutId: number }> = new Map();
   isManualSave: boolean = false;
   previousActiveFilePath: string | null = null;
+  statusIcon: HTMLElement;
 
   async onload() {
-    console.log("Plugin loaded.");
+    console.log("loading plugin obsidian-autosave-control");
 
     // Load settings
     await this.loadSettings();
 
+    // Create and initialize status icon
+    this.addStatusIcon();
+
     // Add settings tab
-    this.addSettingTab(new CustomFileLockSettingTab(this.app, this));
+    this.addSettingTab(new ObsidianAutosaveControlSettingTab(this.app, this));
 
     // Save the original 'modify' method
     this.originalVaultModify = this.app.vault.modify.bind(this.app.vault);
@@ -55,6 +59,9 @@ export default class CustomFileLockPlugin extends Plugin {
 
         this.lockedFiles.set(filePath, { file, content: data, timeoutId });
       }
+
+      // Update the icon state
+      this.updateIconState();
 
       // Do not save to disk immediately
       return;
@@ -114,6 +121,25 @@ export default class CustomFileLockPlugin extends Plugin {
       this.saveAllLockedFiles();
     }));
 
+    // Handle file rename events
+    this.registerEvent(
+      this.app.vault.on('rename', (file: TFile, oldPath: string) => {
+        if (this.lockedFiles.has(oldPath)) {
+          console.log(`File renamed from ${oldPath} to ${file.path}`);
+
+          // Get the locked file entry
+          const lockedFile = this.lockedFiles.get(oldPath)!;
+
+          // Remove the old entry and add the new one
+          this.lockedFiles.delete(oldPath);
+          this.lockedFiles.set(file.path, { ...lockedFile, file });
+
+          // Update the status icon state
+          this.updateIconState();
+        }
+      })
+    );
+
     // Register file close (active-leaf-change) event listener
     this.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => {
@@ -129,6 +155,31 @@ export default class CustomFileLockPlugin extends Plugin {
         }
       })
     );
+  }
+
+  // Create a status icon in the title bar
+  addStatusIcon() {
+    this.statusIcon = this.addStatusBarItem();
+    this.statusIcon.setText('●');  // Simple circle indicator
+    //this.statusIcon.setAttr('aria-label', 'Save Status');
+    this.statusIcon.addClass('save-status-icon');
+
+    // Set initial state to green (everything saved)
+    this.statusIcon.style.color = 'limegreen';
+    this.statusIcon.setAttribute('title', 'All changes saved');
+  }
+
+  // Update the icon's color and tooltip based on locked files
+  updateIconState() {
+    if (this.lockedFiles.size > 0) {
+      // Set to blue (indicating that some files are locked)
+      this.statusIcon.style.color = 'deepskyblue';
+      this.statusIcon.setAttribute('title', 'Changes pending save');
+    } else {
+      // Set to green (everything saved)
+      this.statusIcon.style.color = 'limegreen';
+      this.statusIcon.setAttribute('title', 'All changes saved');
+    }
   }
 
   async getFileContent(file: TFile): Promise<string> {
@@ -171,6 +222,9 @@ export default class CustomFileLockPlugin extends Plugin {
 
     // Reset manual save flag
     this.isManualSave = false;
+
+    // Update the icon state
+    this.updateIconState();
   }
 
   async saveAllLockedFiles() {
@@ -199,7 +253,7 @@ export default class CustomFileLockPlugin extends Plugin {
   }
 
   onunload() {
-    console.log("Plugin unloaded.");
+    console.log("plugin obsidian-autosave-control unloaded");
 
     // Restore the original 'modify' method
     this.app.vault.modify = this.originalVaultModify;
@@ -214,10 +268,10 @@ export default class CustomFileLockPlugin extends Plugin {
   }
 }
 
-class CustomFileLockSettingTab extends PluginSettingTab {
-  plugin: CustomFileLockPlugin;
+class ObsidianAutosaveControlSettingTab extends PluginSettingTab {
+  plugin: ObsidianAutosaveControlPlugin;
 
-  constructor(app: App, plugin: CustomFileLockPlugin) {
+  constructor(app: App, plugin: ObsidianAutosaveControlPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
@@ -227,7 +281,7 @@ class CustomFileLockSettingTab extends PluginSettingTab {
 
     containerEl.empty();
 
-    containerEl.createEl('h2', { text: 'Custom File Lock Settings' });
+    containerEl.createEl('h2', { text: 'Obsidian Autosave Control Settings' });
 
     new Setting(containerEl)
       .setName('Save Interval')

@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-autosave-control",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "A plugin that allows setting a custom autosave interval.",
 	"main": "main.js",
 	"scripts": {
