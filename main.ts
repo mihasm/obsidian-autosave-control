@@ -23,6 +23,8 @@ export type Pending = {
   timeoutId: number;
 };
 
+const GLOBAL_LAST_INPUT_AT = new Map<string, number>();
+
 export default class AutoSaveControlPlugin extends Plugin {
   settings!: AutoSaveControlSettings;
   private status!: StatusIndicator;
@@ -89,6 +91,8 @@ const LOG = (...a: unknown[]) => dlog("[asc]", ...a);
 
 const INPUT_GRACE_MS = 2100; // allow Obsidian's autosave (~2s) once
 
+const windowsWithListeners = new WeakSet<Window>();
+
 export class AutoSaveController {
   private readonly app: App;
   private readonly getSettings: () => AutoSaveControlSettings;
@@ -98,7 +102,6 @@ export class AutoSaveController {
   private unloading = false;
 
   private pending = new Map<string, Pending>();
-  private lastInputAt = new Map<string, number>();
   private windowEnd = new Map<string, number>();
   private token = new Map<string, number>();
 
@@ -131,17 +134,57 @@ export class AutoSaveController {
     const mark = () => {
       const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
       const p = mv?.file?.path;
-      if (p) this.lastInputAt.set(p, Date.now());
+      LOG("input made:"+p)
+      if (p) this.markInput(p);
     };
+
     this.onInput = () => mark();
     this.onPaste = () => mark();
     this.onCut = () => mark();
 
-    window.addEventListener("input", this.onInput, true);
-    window.addEventListener("paste", this.onPaste, true);
-    window.addEventListener("cut", this.onCut, true);
+    this.app.workspace.on("active-leaf-change", (leaf) => {
+      LOG("leaf changed");
+      if(!leaf) return;
+      const view = leaf.view;
+      if (view instanceof MarkdownView) {
+        this.applyGlobalInputListeners();
+      }
+    });
 
     LOG("wrapped save");
+  }
+
+  private applyGlobalInputListeners() {
+    LOG("applying global input listeners");
+    if (windowsWithListeners.has(activeWindow)) return; // already applied
+
+    const mark = () => {
+      const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
+      const path = mv?.file?.path;
+      if (path) this.markInput(path);
+    };
+
+    const onInput = () => mark();
+    const onPaste = () => mark();
+    const onCut = () => mark();
+
+    activeWindow.addEventListener("input", onInput, true);
+    activeWindow.addEventListener("paste", onPaste, true);
+    activeWindow.addEventListener("cut", onCut, true);
+
+    windowsWithListeners.add(activeWindow);
+
+    // flush all pending files when window is closing
+    activeWindow.addEventListener("beforeunload", () => {
+      this.flushAllPending();
+    });
+  }
+
+  private async flushAllPending() {
+    const paths = Array.from(this.pending.keys());
+    for (const path of paths) {
+      await this.flush(path);
+    }
   }
 
   /** Restore original save and detach listeners */
@@ -167,15 +210,16 @@ export class AutoSaveController {
     return function wrappedSave(this: MarkdownView, ...args: unknown[]) {
       const file: TFile | null | undefined = this.file;
       const path = file?.path;
+      LOG("wrapped Save called:"+path+"/"+file);
       if (!path) return original.apply(this, args);
 
       const now = Date.now();
-      const last = self.lastInputAt.get(path) ?? 0;
+      const last = GLOBAL_LAST_INPUT_AT.get(path) ?? 0;  // use global map
       const since = now - last;
+      LOG(path+":since:"+since);
       const insideGrace = since >= 0 && since <= INPUT_GRACE_MS;
 
       if (self.unloading) {
-        // On quit/close: never defer (avoid empty pre-transaction saves)
         self.clearPending(path);
         self.windowEnd.delete(path);
         self.token.delete(path);
@@ -189,26 +233,27 @@ export class AutoSaveController {
         const sameEpoch = tok !== undefined && tok === last;
 
         if (windowAlive && sameEpoch) {
-          // Second hit in same input epoch -> allow write
           self.clearPending(path);
           self.windowEnd.delete(path);
           self.token.delete(path);
           return original.apply(this, args);
         }
 
-        // First hit -> defer once
         self.defer(path, this as TextFileView);
         self.windowEnd.set(path, last + INPUT_GRACE_MS);
         self.token.set(path, last);
         return;
       }
 
-      // Outside grace -> pass through
       self.clearPending(path);
       self.windowEnd.delete(path);
       self.token.delete(path);
       return original.apply(this, args);
     };
+  }
+
+  private markInput(path: string) {
+    GLOBAL_LAST_INPUT_AT.set(path, Date.now());
   }
 
   private defer(path: string, view: TextFileView) {
