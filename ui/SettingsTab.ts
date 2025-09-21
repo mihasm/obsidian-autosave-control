@@ -1,6 +1,6 @@
 // src/ui/SettingsTab.ts
 import { PluginSettingTab, Setting, App } from "obsidian";
-import type { AutoSaveControlSettings } from "../types";
+import type { AutoSaveControlSettings } from "../main";
 
 export interface SettingsHost {
   settings: AutoSaveControlSettings;
