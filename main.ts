@@ -1,5 +1,5 @@
 // src/main.ts
-import { Plugin } from "obsidian";
+import { Plugin, Notice } from "obsidian";
 import { StatusIndicator } from "./ui/StatusIndicator";
 import { AutoSaveControlSettingTab } from "./ui/SettingsTab";
 import { App, MarkdownView, TFile, TextFileView } from "obsidian";
@@ -39,7 +39,7 @@ export default class AutoSaveControlPlugin extends Plugin {
     this.status.attach();
 
     // controller
-    this.controller = new AutoSaveController(this.app, () => this.settings);
+    this.controller = new AutoSaveController(this.app, () => this.settings, this);
     this.controller.setPendingCallback((count) => this.status.setPending(count));
     this.controller.apply();
 
@@ -96,6 +96,7 @@ const windowsWithListeners = new WeakSet<Window>();
 export class AutoSaveController {
   private readonly app: App;
   private readonly getSettings: () => AutoSaveControlSettings;
+  private readonly plugin: Plugin;
   private onPendingChange?: (count: number) => void;
 
   private origSave: SaveFn | null = null;
@@ -106,13 +107,11 @@ export class AutoSaveController {
   private token = new Map<string, number>();
 
   private onBeforeUnload?: () => void;
-  private onInput?: (ev: Event) => void;
-  private onPaste?: (ev: Event) => void;
-  private onCut?: (ev: Event) => void;
 
-  constructor(app: App, settings: () => AutoSaveControlSettings) {
+  constructor(app: App, settings: () => AutoSaveControlSettings, plugin: Plugin) {
     this.app = app;
     this.getSettings = settings;
+    this.plugin = plugin;
   }
 
   setPendingCallback(cb: (count: number) => void) {
@@ -131,17 +130,10 @@ export class AutoSaveController {
     this.onBeforeUnload = () => { this.unloading = true; };
     window.addEventListener("beforeunload", this.onBeforeUnload, { capture: true });
 
-    const mark = () => {
-      const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
-      const p = mv?.file?.path;
-      LOG("input made:"+p)
-      if (p) this.markInput(p);
-    };
+    // Apply input listeners immediately
+    this.applyGlobalInputListeners();
 
-    this.onInput = () => mark();
-    this.onPaste = () => mark();
-    this.onCut = () => mark();
-
+    // Also apply when switching to markdown views
     this.app.workspace.on("active-leaf-change", (leaf) => {
       LOG("leaf changed");
       if(!leaf) return;
@@ -156,26 +148,35 @@ export class AutoSaveController {
 
   private applyGlobalInputListeners() {
     LOG("applying global input listeners");
-    if (windowsWithListeners.has(activeWindow)) return; // already applied
+    const win = window;
+    if (windowsWithListeners.has(win)) {
+      LOG("listeners already applied to this window");
+      return; // already applied
+    }
 
     const mark = () => {
       const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
       const path = mv?.file?.path;
-      if (path) this.markInput(path);
+      LOG("input event detected, file:", path);
+      if (path) {
+        this.markInput(path);
+        LOG("marked input for", path, "at", Date.now());
+      }
     };
 
     const onInput = () => mark();
     const onPaste = () => mark();
     const onCut = () => mark();
 
-    activeWindow.addEventListener("input", onInput, true);
-    activeWindow.addEventListener("paste", onPaste, true);
-    activeWindow.addEventListener("cut", onCut, true);
+    win.addEventListener("input", onInput, true);
+    win.addEventListener("paste", onPaste, true);
+    win.addEventListener("cut", onCut, true);
 
-    windowsWithListeners.add(activeWindow);
+    windowsWithListeners.add(win);
+    LOG("input listeners registered on window");
 
     // flush all pending files when window is closing
-    activeWindow.addEventListener("beforeunload", () => {
+    win.addEventListener("beforeunload", () => {
       this.flushAllPending();
     });
   }
@@ -196,11 +197,7 @@ export class AutoSaveController {
     }
 
     if (this.onBeforeUnload) window.removeEventListener("beforeunload", this.onBeforeUnload, { capture: true } as AddEventListenerOptions);
-    if (this.onInput) window.removeEventListener("input", this.onInput, true);
-    if (this.onPaste) window.removeEventListener("paste", this.onPaste, true);
-    if (this.onCut) window.removeEventListener("cut", this.onCut, true);
-
-    this.onBeforeUnload = this.onInput = this.onPaste = this.onCut = undefined;
+    this.onBeforeUnload = undefined;
     LOG("restored save");
   }
 
@@ -219,13 +216,18 @@ export class AutoSaveController {
       LOG(path+":since:"+since);
       const insideGrace = since >= 0 && since <= INPUT_GRACE_MS;
 
+      // If unloading, save immediately
       if (self.unloading) {
+        LOG(path+": unloading, saving immediately");
         self.clearPending(path);
         self.windowEnd.delete(path);
         self.token.delete(path);
         return original.apply(this, args);
       }
 
+      // Check if there's already a pending save for this file
+      const hasPending = self.pending.has(path);
+      
       if (insideGrace) {
         const end = self.windowEnd.get(path) ?? 0;
         const tok = self.token.get(path);
@@ -233,18 +235,26 @@ export class AutoSaveController {
         const sameEpoch = tok !== undefined && tok === last;
 
         if (windowAlive && sameEpoch) {
-          self.clearPending(path);
-          self.windowEnd.delete(path);
-          self.token.delete(path);
-          return original.apply(this, args);
+          LOG(path+": inside grace window, already deferred, ignoring");
+          return; // Already deferred, ignore this save attempt
         }
 
+        LOG(path+": inside grace, deferring save for " + self.getSettings().saveInterval + "s");
         self.defer(path, this as TextFileView);
         self.windowEnd.set(path, last + INPUT_GRACE_MS);
         self.token.set(path, last);
         return;
       }
 
+      // Outside grace period
+      if (hasPending) {
+        // If there's a pending save, let it complete via the timer
+        LOG(path+": outside grace but has pending, ignoring (will save via timer)");
+        return;
+      }
+
+      // No recent input and no pending save, allow immediate save
+      LOG(path+": no recent input, no pending, saving immediately");
       self.clearPending(path);
       self.windowEnd.delete(path);
       self.token.delete(path);
@@ -258,8 +268,11 @@ export class AutoSaveController {
 
   private defer(path: string, view: TextFileView) {
     const existing = this.pending.get(path);
-    if (existing) clearTimeout(existing.timeoutId);
-    const timeoutId = window.setTimeout(() => this.flush(path), this.getSettings().saveInterval * 1000);
+    if (existing) {
+      clearTimeout(existing.timeoutId);
+   }
+    const interval = this.getSettings().saveInterval;
+    const timeoutId = window.setTimeout(() => this.flush(path), interval * 1000);
     this.pending.set(path, { file: view.file!, view, timeoutId });
     this.emitPending();
   }
