@@ -1,0 +1,122 @@
+name: Bug report
+description: Report a reproducible problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue.
+
+        Please include enough information for us to reproduce the problem.
+        Issues without reproduction steps may be closed.
+
+  - type: input
+    id: obsidian_version
+    attributes:
+      label: Obsidian version
+      description: Which Obsidian version are you using?
+      placeholder: "1.8.10"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Autosave Control plugin version
+      description: Which plugin version are you using?
+      placeholder: "0.0.14"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where are you seeing the issue?
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - iOS
+        - Android
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the problem clearly.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Exact steps to reproduce from scratch
+      description: Include every step, including how you open/switch notes.
+      placeholder: |
+        1. Open Obsidian with vault ...
+        2. Open existing note ...
+        3. Switch notes using Cmd+O/sidebar/search ...
+        4. Observe status icon turns blue ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Plugin mode
+      description: Is "Disable autosave completely" enabled in Obsidian Autosave Control?
+      options:
+        - "OFF (delayed autosave enabled)"
+        - "ON (manual-save only)"
+        - "I am not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sync_service
+    attributes:
+      label: Are you using a sync service?
+      description: This helps diagnose save timing, conflicts, and overwrite behavior. Do not include account details, vault names, email addresses, or private note contents.
+      options:
+        - "No"
+        - "Yes - Obsidian Sync"
+        - "Yes - iCloud"
+        - "Yes - Dropbox"
+        - "Yes - Google Drive"
+        - "Yes - OneDrive"
+        - "Yes - other"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: sync_service_other
+    attributes:
+      label: If "Yes - other", which sync service?
+      description: Leave blank unless you selected "Yes - other" above.
+      placeholder: "Syncthing / Nextcloud / Resilio / ..."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I included exact reproduction steps from scratch.
+          required: true
