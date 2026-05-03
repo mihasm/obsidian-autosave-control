@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[feature]: "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement.
+
+        Please describe the problem and the desired outcome clearly.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Feature summary
+      description: What feature would you like to see?
+      placeholder: "Add an option to ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem does this solve for you?
+      placeholder: "I need this because ..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed solution
+      description: Describe how you think this should work.
+      placeholder: |
+        Example behavior:
+        1. Go to ...
+        2. Enable ...
+        3. Observe ...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and feature requests and did not find a duplicate.
+          required: true
+        - label: This is a feature request, not a bug report.
+          required: true
