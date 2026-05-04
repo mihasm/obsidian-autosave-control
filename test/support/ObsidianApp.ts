@@ -172,6 +172,76 @@ class ObsidianApp {
     await this.focusEditor(options);
   }
 
+  async clickSidebarNote(notePath: string, options: { preserveCursor?: boolean } = {}) {
+    const folderParts = notePath.split("/").slice(0, -1);
+    let currentFolderPath = "";
+
+    for (const folderPart of folderParts) {
+      currentFolderPath = currentFolderPath ? `${currentFolderPath}/${folderPart}` : folderPart;
+
+      await browser.execute((targetFolderPath: string) => {
+        const explorer = document.querySelector(".workspace-leaf-content[data-type='file-explorer']");
+        if (!explorer) {
+          throw new Error("File explorer was not found.");
+        }
+
+        const folderElement = explorer.querySelector(
+          `.tree-item-self[data-path="${targetFolderPath}"], .nav-folder-title[data-path="${targetFolderPath}"]`
+        ) as HTMLElement | null;
+        if (!folderElement) {
+          const availablePaths = Array.from(explorer.querySelectorAll("[data-path]"))
+            .map((element) => element.getAttribute("data-path"))
+            .filter((value): value is string => Boolean(value));
+          throw new Error(
+            `Sidebar folder '${targetFolderPath}' was not found. Visible paths: ${availablePaths.join(", ")}`
+          );
+        }
+
+        const treeItem = folderElement.closest(".tree-item");
+        if (treeItem?.classList.contains("is-collapsed")) {
+          folderElement.click();
+        }
+      }, currentFolderPath);
+    }
+
+    await browser.waitUntil(async () => {
+      return browser.execute((targetNotePath: string) => {
+        const explorer = document.querySelector(".workspace-leaf-content[data-type='file-explorer']");
+        if (!explorer) {
+          return false;
+        }
+
+        return Boolean(
+          explorer.querySelector(
+            `.tree-item-self[data-path="${targetNotePath}"], .nav-file-title[data-path="${targetNotePath}"]`
+          )
+        );
+      }, notePath);
+    }, {
+      timeout: 10000,
+      timeoutMsg: `Sidebar note '${notePath}' did not appear in time.`,
+    });
+
+    await browser.execute((targetNotePath: string) => {
+      const explorer = document.querySelector(".workspace-leaf-content[data-type='file-explorer']");
+      if (!explorer) {
+        throw new Error("File explorer was not found.");
+      }
+
+      const noteElement = explorer.querySelector(
+        `.tree-item-self[data-path="${targetNotePath}"], .nav-file-title[data-path="${targetNotePath}"]`
+      ) as HTMLElement | null;
+      if (!noteElement) {
+        throw new Error(`Sidebar note '${targetNotePath}' was not found.`);
+      }
+
+      noteElement.click();
+    }, notePath);
+
+    await this.waitForActiveFile(notePath);
+    await this.focusEditor(options);
+  }
+
   async openExistingNoteViaQuickSwitcher(notePath: string, options: { preserveCursor?: boolean; focusEditor?: boolean } = {}) {
     const noteQuery = path.posix.basename(notePath, ".md");
 
@@ -443,6 +513,39 @@ class ObsidianApp {
     const vaultBasePath = await this.getVaultBasePath();
     const stats = await fs.stat(path.join(vaultBasePath, notePath));
     return stats.mtimeMs;
+  }
+
+  async getWorkspaceFileMtimeMs() {
+    const vaultBasePath = await this.getVaultBasePath();
+    const obsidianConfigPath = path.join(vaultBasePath, ".obsidian");
+    const workspaceFileName = (await fs.readdir(obsidianConfigPath))
+      .find((fileName) => /^workspace.*\.json$/u.test(fileName));
+
+    if (!workspaceFileName) {
+      return null;
+    }
+
+    const stats = await fs.stat(path.join(obsidianConfigPath, workspaceFileName));
+    return stats.mtimeMs;
+  }
+
+  async waitForWorkspaceFileMtimeChange(previousMtimeMs: number | null, timeout = 10000) {
+    await browser.waitUntil(async () => {
+      try {
+        const currentMtimeMs = await this.getWorkspaceFileMtimeMs();
+        if (currentMtimeMs === null) {
+          return false;
+        }
+
+        return previousMtimeMs === null || currentMtimeMs > previousMtimeMs;
+      } catch {
+        return false;
+      }
+    }, {
+      timeout,
+      interval: 200,
+      timeoutMsg: ".obsidian/workspace*.json did not change in time.",
+    });
   }
 
   async waitForVaultFileContent(notePath: string, expectedContent: string, timeout = 10000) {

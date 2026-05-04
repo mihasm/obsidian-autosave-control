@@ -546,6 +546,80 @@ describe("Autosave Control manual scenarios", () => {
     await expectSavedAfterDelay(notePath, "still pending", 4000);
   });
 
+  it("keeps the status saved after sidebar note switches update workspace.json in manual-only mode", async () => {
+    const firstNotePath = "settings/manual-only-switch-first.md";
+    const secondNotePath = "settings/manual-only-switch-second.md";
+    const firstNoteContent = "first note stays saved";
+    const secondNoteContent = "second note stays saved";
+    const savedStatusColor = "rgb(50, 205, 50)";
+
+    await ObsidianApp.setPluginSettings({
+      disableAutoSave: true,
+      saveDelaySeconds: SHORT_DELAY_SECONDS,
+      savedStatusColor: "#32cd32",
+      pendingStatusColor: "#00bfff",
+    });
+    await ObsidianApp.createAndOpenNote(firstNotePath, firstNoteContent);
+    await ObsidianApp.createAndOpenNote(secondNotePath, secondNoteContent);
+    await ObsidianApp.waitForSavedStatus();
+    await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
+
+    let workspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+
+    for (let i = 0; i < 3; i += 1) {
+      await ObsidianApp.clickSidebarNote(firstNotePath);
+      await ObsidianApp.waitForWorkspaceFileMtimeChange(workspaceMtimeMs);
+      workspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+      await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
+      await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
+
+      await ObsidianApp.clickSidebarNote(secondNotePath);
+      await ObsidianApp.waitForWorkspaceFileMtimeChange(workspaceMtimeMs);
+      workspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+      await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
+      await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
+    }
+
+    await ObsidianApp.waitForSavedStatus();
+    await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
+
+    await ObsidianApp.openExistingNote(firstNotePath);
+    await ObsidianApp.typeText(" plus a real edit");
+    await ObsidianApp.waitForPendingStatus();
+    await expect(await ObsidianApp.readVaultFile(firstNotePath)).toBe(firstNoteContent);
+
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(firstNotePath, `${firstNoteContent} plus a real edit`, 4000);
+    await expect(await ObsidianApp.readVaultFile(secondNotePath)).toBe(secondNoteContent);
+  });
+
+  it("ignores workspace layout saves when autosave is completely disabled", async () => {
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote("settings/manual-only-layout-anchor.md", "anchor");
+    await ObsidianApp.waitForSavedStatus();
+
+    const layoutSaveMethods = await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      return {
+        requestSaveLayout: typeof app.workspace?.requestSaveLayout,
+        saveLayout: typeof app.workspace?.saveLayout,
+      };
+    });
+
+    await browser.execute(async () => {
+      const app = (window as typeof window & { app: any }).app;
+      await app.workspace?.requestSaveLayout?.();
+      await app.workspace?.saveLayout?.();
+    });
+    await browser.pause(500);
+
+    await ObsidianApp.waitForSavedStatus();
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
+    await expect(await ObsidianApp.getPendingStatusCount()).toBe(0);
+
+    await expect(layoutSaveMethods.requestSaveLayout === "function" || layoutSaveMethods.saveLayout === "function").toBe(true);
+  });
+
   it("shows a confirmation prompt when closing Obsidian with pending changes in manual-only mode", async () => {
     const notePath = "settings/quit-prompt.md";
 
