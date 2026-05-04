@@ -139,16 +139,43 @@ const metadataRaw = await waitForFile(metadataPath, 30000);
 const metadata = JSON.parse(metadataRaw);
 const noteAbsolutePath = path.join(metadata.vaultBasePath, metadata.notePath);
 
+async function getWorkspaceFileInfo(vaultBasePath) {
+  const obsidianConfigPath = path.join(vaultBasePath, ".obsidian");
+  const workspaceFileName = (await fs.readdir(obsidianConfigPath))
+    .find((fileName) => /^workspace.*\.json$/u.test(fileName));
+
+  if (!workspaceFileName) {
+    throw new Error(`Could not find workspace json in ${obsidianConfigPath}`);
+  }
+
+  const workspaceAbsolutePath = path.join(obsidianConfigPath, workspaceFileName);
+  const stats = await fs.stat(workspaceAbsolutePath);
+  const raw = await fs.readFile(workspaceAbsolutePath, "utf8");
+
+  return {
+    workspaceAbsolutePath,
+    mtimeMs: stats.mtimeMs,
+    raw,
+  };
+}
+
 await wait(1000);
 sendRealQuitShortcut(metadata.appPid);
 
 let savedContent = null;
 let fileExists = false;
+let workspaceInfo = null;
 for (let attempt = 0; attempt < 40; attempt += 1) {
   try {
     savedContent = await fs.readFile(noteAbsolutePath, "utf8");
     fileExists = true;
-    if (savedContent === metadata.expectedContent) {
+    workspaceInfo = await getWorkspaceFileInfo(metadata.vaultBasePath);
+    const workspaceHasActiveFile = typeof metadata.expectedActiveFilePath !== "string"
+      || workspaceInfo.raw.includes(metadata.expectedActiveFilePath);
+    const workspaceMtimeAdvanced = typeof metadata.workspaceMtimeBeforeSwitch !== "number"
+      || workspaceInfo.mtimeMs > metadata.workspaceMtimeBeforeSwitch;
+
+    if (savedContent === metadata.expectedContent && workspaceHasActiveFile && workspaceMtimeAdvanced) {
       break;
     }
   } catch {
@@ -169,6 +196,26 @@ if (!fileExists) {
 
 if (savedContent !== metadata.expectedContent) {
   failures.push(`expected '${metadata.expectedContent}' but found '${savedContent ?? "<missing>"}'`);
+}
+
+if (!workspaceInfo) {
+  failures.push("workspace json was not found after quit");
+} else {
+  if (
+    typeof metadata.workspaceMtimeBeforeSwitch === "number"
+    && !(workspaceInfo.mtimeMs > metadata.workspaceMtimeBeforeSwitch)
+  ) {
+    failures.push(
+      `expected workspace mtime to advance past ${metadata.workspaceMtimeBeforeSwitch} but found ${workspaceInfo.mtimeMs}`
+    );
+  }
+
+  if (
+    typeof metadata.expectedActiveFilePath === "string"
+    && !workspaceInfo.raw.includes(metadata.expectedActiveFilePath)
+  ) {
+    failures.push(`expected workspace json to mention active file '${metadata.expectedActiveFilePath}'`);
+  }
 }
 
 if (appStillRunning) {

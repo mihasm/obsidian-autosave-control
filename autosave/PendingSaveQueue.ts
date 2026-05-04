@@ -23,6 +23,7 @@ export class PendingSaveQueue {
     private readonly getOriginalSave: () => SaveFn | null,
     private readonly shouldWriteDirectlyToVault: () => boolean,
     private readonly onPendingSaveCountChange: (pendingSaveCount: number) => void,
+    private readonly onFlushComplete?: (filePath: string) => Promise<void> | void,
   ) {}
 
   schedule(filePath: string, view: TextFileView) {
@@ -176,6 +177,7 @@ export class PendingSaveQueue {
     const attachedViewFilePath = pendingSave.view.file?.path;
     if (!this.shouldWriteDirectlyToVault() && attachedViewFilePath === filePath) {
       await originalSave.call(pendingSave.view as unknown as MarkdownView);
+      await this.onFlushComplete?.(filePath);
       return;
     }
 
@@ -183,10 +185,12 @@ export class PendingSaveQueue {
     if (fileSystemAdapter instanceof FileSystemAdapter) {
       fs.writeFileSync(path.join(fileSystemAdapter.getBasePath(), filePath), pendingSave.latestData, "utf8");
       dlog("Pending save flushed via filesystem", filePath);
+      await this.onFlushComplete?.(filePath);
       return;
     }
 
     await this.app.vault.modify(file, pendingSave.latestData);
+    await this.onFlushComplete?.(filePath);
 
     dlog("Pending save flushed", filePath);
   }

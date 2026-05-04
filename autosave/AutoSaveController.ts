@@ -3,6 +3,7 @@ import { dlog } from "../debug";
 import type { AutoSaveControlSettings } from "../settings/AutoSaveSettings";
 import { EditActivityTracker } from "./EditActivityTracker";
 import { PendingSaveQueue } from "./PendingSaveQueue";
+import { WorkspaceLayoutSaveController } from "./WorkspaceLayoutSaveController";
 
 type SaveFn = (this: MarkdownView, ...args: unknown[]) => Promise<void> | void;
 type RequestSaveFn = (this: TextFileView, ...args: unknown[]) => void;
@@ -39,6 +40,7 @@ export class AutoSaveController {
 
   private readonly editActivityTracker: EditActivityTracker;
   private readonly pendingSaveQueue: PendingSaveQueue;
+  private readonly workspaceLayoutSaveController: WorkspaceLayoutSaveController;
   private readonly beforeUnloadListenersByWindow = new Map<Window, BeforeUnloadListener>();
   private readonly quitShortcutListenersByWindow = new Map<Window, (event: KeyboardEvent) => void>();
   private readonly fileSwitchingLeaves = new WeakSet<WorkspaceLeaf>();
@@ -68,6 +70,12 @@ export class AutoSaveController {
       () => this.originalSave,
       () => this.isUnloading,
       (pendingSaveCount) => this.onPendingSaveCountChange?.(pendingSaveCount),
+      async () => this.workspaceLayoutSaveController.flush(),
+    );
+    this.workspaceLayoutSaveController = new WorkspaceLayoutSaveController(
+      this.app,
+      () => this.getSettings().deferWorkspaceLayoutSaves,
+      () => this.getSettings().workspaceLayoutSaveDelaySeconds,
     );
   }
 
@@ -77,6 +85,7 @@ export class AutoSaveController {
 
   refreshScheduling() {
     this.pendingSaveQueue.refreshScheduling();
+    this.workspaceLayoutSaveController.refreshScheduling();
   }
 
   enable() {
@@ -122,6 +131,7 @@ export class AutoSaveController {
     workspaceLeafViewStatePrototype.detach = this.installedDetachWrapper;
 
     this.wrapSaveCommand();
+    this.workspaceLayoutSaveController.enable();
 
     this.isUnloading = false;
     this.vaultRenameEventRef = this.app.vault.on("rename", (file, oldPath) => {
@@ -146,12 +156,16 @@ export class AutoSaveController {
       if (!this.getSettings().disableAutoSave && this.pendingSaveQueue.hasAny()) {
         tasks.add(async () => {
           await this.pendingSaveQueue.flushAll();
+          await this.workspaceLayoutSaveController.flush();
           this.isUnloading = true;
           this.exitApplicationAfterFlush();
         });
         return;
       }
 
+      tasks.add(async () => {
+        await this.workspaceLayoutSaveController.flush();
+      });
       this.isUnloading = true;
     });
 
@@ -219,6 +233,7 @@ export class AutoSaveController {
     this.installedDetachWrapper = null;
 
     this.restoreSaveCommand();
+    this.workspaceLayoutSaveController.disable();
 
     if (this.workspaceLeafChangeEventRef) {
       this.app.workspace.offref(this.workspaceLeafChangeEventRef);
@@ -265,11 +280,13 @@ export class AutoSaveController {
           return saveResult.then(() => {
             controller.pendingSaveQueue.clear(filePath);
             controller.captureCurrentViewData(filePath, this as unknown as TextFileView);
+            return controller.workspaceLayoutSaveController.flush();
           });
         }
 
         controller.pendingSaveQueue.clear(filePath);
         controller.captureCurrentViewData(filePath, this as unknown as TextFileView);
+        void controller.workspaceLayoutSaveController.flush();
         return saveResult;
       }
 

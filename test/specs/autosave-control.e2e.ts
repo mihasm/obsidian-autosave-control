@@ -2,6 +2,7 @@ import { browser, expect } from "@wdio/globals";
 import ObsidianApp from "../support/ObsidianApp";
 
 const SHORT_DELAY_SECONDS = 3;
+const LONG_WORKSPACE_LAYOUT_DELAY_SECONDS = 10;
 
 async function enableDelayedAutosave(saveDelaySeconds = SHORT_DELAY_SECONDS) {
   await ObsidianApp.setPluginSettings({
@@ -14,6 +15,13 @@ async function enableManualOnlyMode() {
   await ObsidianApp.setPluginSettings({
     disableAutoSave: true,
     saveDelaySeconds: SHORT_DELAY_SECONDS,
+  });
+}
+
+async function enableWorkspaceLayoutDeferral(workspaceLayoutSaveDelaySeconds = LONG_WORKSPACE_LAYOUT_DELAY_SECONDS) {
+  await ObsidianApp.setPluginSettings({
+    deferWorkspaceLayoutSaves: true,
+    workspaceLayoutSaveDelaySeconds,
   });
 }
 
@@ -553,6 +561,7 @@ describe("Autosave Control manual scenarios", () => {
     const secondNoteContent = "second note stays saved";
 
     await enableManualOnlyMode();
+    await enableWorkspaceLayoutDeferral();
     await ObsidianApp.createAndOpenNote(firstNotePath, firstNoteContent);
     await ObsidianApp.createAndOpenNote(secondNotePath, secondNoteContent);
     const firstNoteMtimeMs = await ObsidianApp.getVaultFileMtimeMs(firstNotePath);
@@ -580,10 +589,96 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.readVaultFile(secondNotePath)).toBe(secondNoteContent);
   });
 
-  it("ignores workspace layout saves when autosave is completely disabled", async () => {
+  it("flushes deferred workspace.json when manual save succeeds", async () => {
+    const firstNotePath = "settings/manual-only-layout-flush-first.md";
+    const secondNotePath = "settings/manual-only-layout-flush-second.md";
+
     await enableManualOnlyMode();
-    await ObsidianApp.createAndOpenNote("settings/manual-only-layout-anchor.md", "anchor");
-    await ObsidianApp.waitForSavedStatus();
+    await enableWorkspaceLayoutDeferral();
+    await ObsidianApp.createAndOpenNote(firstNotePath, "first");
+    await ObsidianApp.createAndOpenNote(secondNotePath, "second");
+    await ObsidianApp.clickSidebarNote(firstNotePath);
+    await browser.pause(2500);
+    const initialWorkspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+
+    await ObsidianApp.clickSidebarNote(secondNotePath);
+    await browser.pause(2500);
+    await expect(await ObsidianApp.getWorkspaceFileMtimeMs()).toBe(initialWorkspaceMtimeMs);
+
+    await ObsidianApp.openExistingNote(firstNotePath);
+    await ObsidianApp.typeText(" plus edit");
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(firstNotePath, "first plus edit", 4000);
+    await ObsidianApp.waitForWorkspaceFileMtimeChange(initialWorkspaceMtimeMs, 4000);
+  });
+
+  it("flushes deferred workspace.json when autosave completes", async () => {
+    const firstNotePath = "settings/autosave-layout-flush-first.md";
+    const secondNotePath = "settings/autosave-layout-flush-second.md";
+
+    await enableDelayedAutosave();
+    await enableWorkspaceLayoutDeferral();
+    await ObsidianApp.createAndOpenNote(firstNotePath, "first");
+    await ObsidianApp.createAndOpenNote(secondNotePath, "second");
+    await ObsidianApp.clickSidebarNote(firstNotePath);
+    await browser.pause(2500);
+    const initialWorkspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+
+    await ObsidianApp.clickSidebarNote(secondNotePath);
+    await browser.pause(2500);
+    await expect(await ObsidianApp.getWorkspaceFileMtimeMs()).toBe(initialWorkspaceMtimeMs);
+
+    await ObsidianApp.openExistingNote(firstNotePath);
+    await ObsidianApp.typeText(" plus autosave");
+    await ObsidianApp.waitForPendingStatus();
+    await expectSavedAfterDelay(firstNotePath, "first plus autosave");
+    await ObsidianApp.waitForWorkspaceFileMtimeChange(initialWorkspaceMtimeMs, 4000);
+  });
+
+  it("flushes deferred workspace.json after a 3 second workspace layout delay", async () => {
+    const firstNotePath = "settings/layout-delay-3s-first.md";
+    const secondNotePath = "settings/layout-delay-3s-second.md";
+
+    await enableManualOnlyMode();
+    await enableWorkspaceLayoutDeferral(3);
+    await ObsidianApp.createAndOpenNote(firstNotePath, "first");
+    await ObsidianApp.createAndOpenNote(secondNotePath, "second");
+    await ObsidianApp.clickSidebarNote(firstNotePath);
+    await browser.pause(2500);
+    const initialWorkspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+
+    await ObsidianApp.clickSidebarNote(secondNotePath);
+    await browser.pause(2200);
+    await expect(await ObsidianApp.getWorkspaceFileMtimeMs()).toBe(initialWorkspaceMtimeMs);
+    await ObsidianApp.waitForWorkspaceFileMtimeChange(initialWorkspaceMtimeMs, 4000);
+  });
+
+  it("flushes deferred workspace.json after a 5 second workspace layout delay", async () => {
+    const firstNotePath = "settings/layout-delay-5s-first.md";
+    const secondNotePath = "settings/layout-delay-5s-second.md";
+
+    await enableManualOnlyMode();
+    await enableWorkspaceLayoutDeferral(5);
+    await ObsidianApp.createAndOpenNote(firstNotePath, "first");
+    await ObsidianApp.createAndOpenNote(secondNotePath, "second");
+    await ObsidianApp.clickSidebarNote(firstNotePath);
+    await browser.pause(2500);
+    const initialWorkspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+
+    await ObsidianApp.clickSidebarNote(secondNotePath);
+    await browser.pause(4200);
+    await expect(await ObsidianApp.getWorkspaceFileMtimeMs()).toBe(initialWorkspaceMtimeMs);
+    await ObsidianApp.waitForWorkspaceFileMtimeChange(initialWorkspaceMtimeMs, 4000);
+  });
+
+  it("defers direct workspace layout save calls until the configured flush point", async () => {
+    const notePath = "settings/manual-only-layout-anchor.md";
+
+    await enableManualOnlyMode();
+    await enableWorkspaceLayoutDeferral();
+    await ObsidianApp.createAndOpenNote(notePath, "anchor");
+    await browser.pause(2500);
+    const initialWorkspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
 
     const layoutSaveMethods = await browser.execute(() => {
       const app = (window as typeof window & { app: any }).app;
@@ -600,10 +695,11 @@ describe("Autosave Control manual scenarios", () => {
     });
     await browser.pause(500);
 
-    await ObsidianApp.waitForSavedStatus();
-    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
-    await expect(await ObsidianApp.getPendingStatusCount()).toBe(0);
-
+    await expect(await ObsidianApp.getWorkspaceFileMtimeMs()).toBe(initialWorkspaceMtimeMs);
+    await ObsidianApp.typeText(" edit");
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(notePath, "anchor edit", 4000);
+    await ObsidianApp.waitForWorkspaceFileMtimeChange(initialWorkspaceMtimeMs, 4000);
     await expect(layoutSaveMethods.requestSaveLayout === "function" || layoutSaveMethods.saveLayout === "function").toBe(true);
   });
 
@@ -716,6 +812,8 @@ describe("Autosave Control manual scenarios", () => {
 
     await expect(settings.disableAutoSave).toBe(false);
     await expect(settings.saveDelaySeconds).toBe(10);
+    await expect(settings.deferWorkspaceLayoutSaves).toBe(false);
+    await expect(settings.workspaceLayoutSaveDelaySeconds).toBe(60);
     await expect(settings.savedStatusColor).toBe("#32cd32");
     await expect(settings.pendingStatusColor).toBe("#00bfff");
     await ObsidianApp.waitForSavedStatus();

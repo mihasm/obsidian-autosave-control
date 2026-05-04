@@ -39,22 +39,55 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
     }
 
     if (!this.host.settings.disableAutoSave) {
-    new Setting(containerEl)
-      .setName("Save delay (seconds)")
-      .setDesc("How long to wait after editing stops before saving (3-3600).")
-      .addText((textComponent) =>
-        textComponent
-          .setValue(String(this.host.settings.saveDelaySeconds))
-          .onChange(async (value) => {
-            const parsedValue = Number.parseInt(value, 10);
-            const normalizedValue = Number.isNaN(parsedValue)
-              ? DEFAULT_SAVE_DELAY_SECONDS
-              : Math.max(MIN_SAVE_DELAY_SECONDS, Math.min(MAX_SAVE_DELAY_SECONDS, parsedValue));
+      new Setting(containerEl)
+        .setName("Save delay (seconds)")
+        .setDesc("How long to wait after editing stops before saving (3-3600).")
+        .addText((textComponent) =>
+          textComponent
+            .setValue(String(this.host.settings.saveDelaySeconds))
+            .onChange(async (value) => {
+              const parsedValue = Number.parseInt(value, 10);
+              const normalizedValue = Number.isNaN(parsedValue)
+                ? DEFAULT_SAVE_DELAY_SECONDS
+                : Math.max(MIN_SAVE_DELAY_SECONDS, Math.min(MAX_SAVE_DELAY_SECONDS, parsedValue));
 
-            this.host.settings.saveDelaySeconds = normalizedValue;
-            await this.host.saveSettings();
-          })
+              this.host.settings.saveDelaySeconds = normalizedValue;
+              await this.host.saveSettings();
+            })
+        );
+    }
+
+    new Setting(containerEl)
+      .setName("Defer workspace layout saves")
+      .setDesc("Delay workspace.json writes and flush them later to reduce sync churn when switching files.")
+      .addToggle((toggleComponent) =>
+        toggleComponent.setValue(this.host.settings.deferWorkspaceLayoutSaves).onChange(async (value) => {
+          this.host.settings.deferWorkspaceLayoutSaves = value;
+          await this.host.saveSettings();
+          this.display();
+        })
       );
+
+    if (this.host.settings.deferWorkspaceLayoutSaves) {
+      new Setting(containerEl)
+        .setName("Workspace layout save delay (seconds)")
+        .setDesc("Maximum delay before persisting workspace.json after layout changes (1-3600).")
+        .addText((textComponent) =>
+          textComponent
+            .setValue(String(this.host.settings.workspaceLayoutSaveDelaySeconds))
+            .onChange(async (value) => {
+              const parsedValue = Number.parseInt(value, 10);
+              const normalizedValue = Number.isNaN(parsedValue)
+                ? DEFAULT_WORKSPACE_LAYOUT_SAVE_DELAY_SECONDS
+                : Math.max(
+                    MIN_WORKSPACE_LAYOUT_SAVE_DELAY_SECONDS,
+                    Math.min(MAX_WORKSPACE_LAYOUT_SAVE_DELAY_SECONDS, parsedValue)
+                  );
+
+              this.host.settings.workspaceLayoutSaveDelaySeconds = normalizedValue;
+              await this.host.saveSettings();
+            })
+        );
     }
 
     this.addColorSetting({
@@ -133,6 +166,9 @@ type ColorSettingOptions = {
 const DEFAULT_SAVE_DELAY_SECONDS = 10;
 const MIN_SAVE_DELAY_SECONDS = 3;
 const MAX_SAVE_DELAY_SECONDS = 3600;
+const DEFAULT_WORKSPACE_LAYOUT_SAVE_DELAY_SECONDS = 60;
+const MIN_WORKSPACE_LAYOUT_SAVE_DELAY_SECONDS = 1;
+const MAX_WORKSPACE_LAYOUT_SAVE_DELAY_SECONDS = 3600;
 const DEFAULT_STATUS_ICON_SIZE_PX = 16;
 const MIN_STATUS_ICON_SIZE_PX = 8;
 const MAX_STATUS_ICON_SIZE_PX = 32;

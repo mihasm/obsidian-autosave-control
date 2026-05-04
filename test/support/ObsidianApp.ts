@@ -8,6 +8,8 @@ const SIMPLE_VAULT_PATH = "./test/vaults/simple";
 type PluginSettings = {
   disableAutoSave?: boolean;
   saveDelaySeconds?: number;
+  deferWorkspaceLayoutSaves?: boolean;
+  workspaceLayoutSaveDelaySeconds?: number;
   savedStatusColor?: string;
   pendingStatusColor?: string;
   statusIconSizePx?: number;
