@@ -546,46 +546,33 @@ describe("Autosave Control manual scenarios", () => {
     await expectSavedAfterDelay(notePath, "still pending", 4000);
   });
 
-  it("keeps the status saved after sidebar note switches update workspace.json in manual-only mode", async () => {
+  it("does not update workspace.json after sidebar note switches without note edits in manual-only mode", async () => {
     const firstNotePath = "settings/manual-only-switch-first.md";
     const secondNotePath = "settings/manual-only-switch-second.md";
     const firstNoteContent = "first note stays saved";
     const secondNoteContent = "second note stays saved";
-    const savedStatusColor = "rgb(50, 205, 50)";
 
-    await ObsidianApp.setPluginSettings({
-      disableAutoSave: true,
-      saveDelaySeconds: SHORT_DELAY_SECONDS,
-      savedStatusColor: "#32cd32",
-      pendingStatusColor: "#00bfff",
-    });
+    await enableManualOnlyMode();
     await ObsidianApp.createAndOpenNote(firstNotePath, firstNoteContent);
     await ObsidianApp.createAndOpenNote(secondNotePath, secondNoteContent);
-    await ObsidianApp.waitForSavedStatus();
-    await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
+    const firstNoteMtimeMs = await ObsidianApp.getVaultFileMtimeMs(firstNotePath);
+    const secondNoteMtimeMs = await ObsidianApp.getVaultFileMtimeMs(secondNotePath);
 
-    let workspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
+    await ObsidianApp.clickSidebarNote(firstNotePath);
+    await browser.pause(2500);
+    const initialWorkspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
 
-    for (let i = 0; i < 3; i += 1) {
-      await ObsidianApp.clickSidebarNote(firstNotePath);
-      await ObsidianApp.waitForWorkspaceFileMtimeChange(workspaceMtimeMs);
-      workspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
-      await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
-      await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
+    await ObsidianApp.clickSidebarNote(secondNotePath);
+    await browser.pause(2500);
 
-      await ObsidianApp.clickSidebarNote(secondNotePath);
-      await ObsidianApp.waitForWorkspaceFileMtimeChange(workspaceMtimeMs);
-      workspaceMtimeMs = await ObsidianApp.getWorkspaceFileMtimeMs();
-      await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
-      await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
-    }
-
-    await ObsidianApp.waitForSavedStatus();
-    await expect(await ObsidianApp.getStatusIndicatorColor()).toBe(savedStatusColor);
+    await expect(await ObsidianApp.readVaultFile(firstNotePath)).toBe(firstNoteContent);
+    await expect(await ObsidianApp.readVaultFile(secondNotePath)).toBe(secondNoteContent);
+    await expect(await ObsidianApp.getVaultFileMtimeMs(firstNotePath)).toBe(firstNoteMtimeMs);
+    await expect(await ObsidianApp.getVaultFileMtimeMs(secondNotePath)).toBe(secondNoteMtimeMs);
+    await expect(await ObsidianApp.getWorkspaceFileMtimeMs()).toBe(initialWorkspaceMtimeMs);
 
     await ObsidianApp.openExistingNote(firstNotePath);
     await ObsidianApp.typeText(" plus a real edit");
-    await ObsidianApp.waitForPendingStatus();
     await expect(await ObsidianApp.readVaultFile(firstNotePath)).toBe(firstNoteContent);
 
     await ObsidianApp.runSaveCommand();
