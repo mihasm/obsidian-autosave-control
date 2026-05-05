@@ -174,6 +174,74 @@ class ObsidianApp {
     await this.focusEditor(options);
   }
 
+  async renameActiveFileViaFileManager(newBaseName: string) {
+    const currentFilePath = await this.getActiveFilePath();
+    if (!currentFilePath) {
+      throw new Error("No active file is open.");
+    }
+
+    const directoryPath = path.posix.dirname(currentFilePath);
+    const nextNotePath = `${directoryPath === "." ? "" : `${directoryPath}/`}${newBaseName}.md`;
+
+    await browser.execute(async (nextPath: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const file = app.workspace.getActiveFile();
+
+      if (!file) {
+        throw new Error("No active file is open.");
+      }
+
+      await app.fileManager.renameFile(file, nextPath);
+    }, nextNotePath);
+
+    await this.waitForActiveFile(nextNotePath);
+    return nextNotePath;
+  }
+
+  async renameActiveFileViaTitle(newBaseName: string) {
+    const currentFilePath = await this.getActiveFilePath();
+    if (!currentFilePath) {
+      throw new Error("No active file is open.");
+    }
+
+    const directoryPath = path.posix.dirname(currentFilePath);
+    const nextNotePath = `${directoryPath === "." ? "" : `${directoryPath}/`}${newBaseName}.md`;
+
+    await browser.execute((nextTitle: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const activeView = app.workspace.getActiveViewOfType?.(app.workspace.activeLeaf?.view?.constructor)
+        ?? app.workspace.activeLeaf?.view;
+
+      const titleElement = activeView?.inlineTitleEl
+        ?? document.querySelector(".inline-title")
+        ?? document.querySelector(".inline-title-input")
+        ?? document.querySelector(".view-header-title input")
+        ?? document.querySelector("[contenteditable='true'].inline-title");
+
+      if (!(titleElement instanceof HTMLElement)) {
+        throw new Error("Active note title element was not found.");
+      }
+
+      titleElement.focus();
+
+      if (titleElement instanceof HTMLInputElement || titleElement instanceof HTMLTextAreaElement) {
+        titleElement.value = nextTitle;
+        titleElement.dispatchEvent(new Event("input", { bubbles: true }));
+        titleElement.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        titleElement.textContent = nextTitle;
+        titleElement.dispatchEvent(new InputEvent("input", { bubbles: true, data: nextTitle, inputType: "insertText" }));
+      }
+
+      titleElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      titleElement.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+      titleElement.blur();
+    }, newBaseName);
+
+    await this.waitForActiveFile(nextNotePath);
+    return nextNotePath;
+  }
+
   async requestOpenExistingNote(notePath: string) {
     await browser.execute(async (nextNotePath: string) => {
       const app = (window as typeof window & { app: any }).app;
@@ -579,6 +647,21 @@ class ObsidianApp {
     });
   }
 
+  async waitForVaultFileMissing(notePath: string, timeout = 10000) {
+    await browser.waitUntil(async () => {
+      try {
+        await this.readVaultFile(notePath);
+        return false;
+      } catch {
+        return true;
+      }
+    }, {
+      timeout,
+      interval: 200,
+      timeoutMsg: `Vault file '${notePath}' still exists.`,
+    });
+  }
+
   async waitForPendingStatus() {
     const statusIndicator = await $(".save-status-icon");
     await browser.waitUntil(async () => {
@@ -603,6 +686,34 @@ class ObsidianApp {
     const statusIndicator = await $(".save-status-icon");
     await statusIndicator.waitForExist({ timeout: 10000 });
     return statusIndicator.getAttribute("title");
+  }
+
+  async deleteActiveFile() {
+    await browser.execute(async () => {
+      const app = (window as typeof window & { app: any }).app;
+      const file = app.workspace.getActiveFile();
+
+      if (!file) {
+        throw new Error("No active file is open.");
+      }
+
+      if (typeof app.fileManager?.trashFile === "function") {
+        await app.fileManager.trashFile(file);
+        return;
+      }
+
+      if (typeof app.vault?.trash === "function") {
+        await app.vault.trash(file, false);
+        return;
+      }
+
+      if (typeof app.vault?.delete === "function") {
+        await app.vault.delete(file, true);
+        return;
+      }
+
+      throw new Error("No supported file delete path is available.");
+    });
   }
 
   async getStatusIndicatorCount() {

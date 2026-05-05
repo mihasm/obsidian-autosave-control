@@ -11,6 +11,7 @@ type OpenFileFn = (this: WorkspaceLeaf, ...args: unknown[]) => Promise<unknown>;
 type OnUnloadFileFn = (this: TextFileView, file: TFile) => Promise<void>;
 type SetViewStateFn = (this: WorkspaceLeaf, ...args: unknown[]) => Promise<unknown>;
 type DetachFn = (this: WorkspaceLeaf) => void;
+type DeleteFileFn = (this: unknown, ...args: unknown[]) => Promise<unknown> | unknown;
 type SaveCommandCheckCallback = (checking: boolean) => boolean | void;
 type WrappedFunction<T extends Function> = T & { __ascOriginal?: T; __ascOwner?: AutoSaveController };
 const MANUAL_SAVE_REQUEST_TTL_MS = 5000;
@@ -24,6 +25,9 @@ export class AutoSaveController {
   private originalOnUnloadFile: OnUnloadFileFn | null = null;
   private originalSetViewState: SetViewStateFn | null = null;
   private originalDetach: DetachFn | null = null;
+  private originalVaultTrash: DeleteFileFn | null = null;
+  private originalVaultDelete: DeleteFileFn | null = null;
+  private originalFileManagerTrashFile: DeleteFileFn | null = null;
   private originalSaveCommandCheckCallback: SaveCommandCheckCallback | null = null;
   private installedSaveWrapper: SaveFn | null = null;
   private installedRequestSaveWrapper: RequestSaveFn | null = null;
@@ -31,6 +35,9 @@ export class AutoSaveController {
   private installedOnUnloadFileWrapper: OnUnloadFileFn | null = null;
   private installedSetViewStateWrapper: SetViewStateFn | null = null;
   private installedDetachWrapper: DetachFn | null = null;
+  private installedVaultTrashWrapper: DeleteFileFn | null = null;
+  private installedVaultDeleteWrapper: DeleteFileFn | null = null;
+  private installedFileManagerTrashFileWrapper: DeleteFileFn | null = null;
   private installedSaveCommandCheckCallback: SaveCommandCheckCallback | null = null;
   private isUnloading = false;
   private workspaceLeafChangeEventRef?: EventRef;
@@ -49,6 +56,7 @@ export class AutoSaveController {
   private readonly discardedViews = new WeakSet<TextFileView>();
   private readonly lastSavedDataByPath = new Map<string, string>();
   private readonly cursorPositionByPath = new Map<string, EditorPosition>();
+  private readonly confirmedDeletionPaths = new Set<string>();
 
   constructor(private readonly app: App, private readonly getSettings: () => AutoSaveControlSettings) {
     this.editActivityTracker = new EditActivityTracker(
@@ -103,6 +111,20 @@ export class AutoSaveController {
       setViewState: SetViewStateFn;
       detach: DetachFn;
     };
+    const vaultWithDeleteMethods = this.app.vault as typeof this.app.vault & {
+      trash?: DeleteFileFn;
+      delete?: DeleteFileFn;
+    };
+    const fileManagerWithTrashFile = (this.app as App & {
+      fileManager?: { trashFile?: DeleteFileFn };
+    }).fileManager;
+    const writableVaultWithDeleteMethods = vaultWithDeleteMethods as {
+      trash?: DeleteFileFn;
+      delete?: DeleteFileFn;
+    };
+    const writableFileManagerWithTrashFile = fileManagerWithTrashFile as {
+      trashFile?: DeleteFileFn;
+    } | undefined;
 
     this.originalSave = this.unwrapWrappedFunction(markdownViewPrototype.save);
     this.installedSaveWrapper = this.createSaveWrapper(this.originalSave);
@@ -129,6 +151,24 @@ export class AutoSaveController {
     this.originalDetach = this.unwrapWrappedFunction(workspaceLeafViewStatePrototype.detach);
     this.installedDetachWrapper = this.createDetachWrapper(this.originalDetach);
     workspaceLeafViewStatePrototype.detach = this.installedDetachWrapper;
+
+    if (typeof vaultWithDeleteMethods.trash === "function") {
+      this.originalVaultTrash = this.unwrapWrappedFunction(vaultWithDeleteMethods.trash);
+      this.installedVaultTrashWrapper = this.createDeleteWrapper(this.originalVaultTrash);
+      writableVaultWithDeleteMethods.trash = this.installedVaultTrashWrapper;
+    }
+
+    if (typeof vaultWithDeleteMethods.delete === "function") {
+      this.originalVaultDelete = this.unwrapWrappedFunction(vaultWithDeleteMethods.delete);
+      this.installedVaultDeleteWrapper = this.createDeleteWrapper(this.originalVaultDelete);
+      writableVaultWithDeleteMethods.delete = this.installedVaultDeleteWrapper;
+    }
+
+    if (typeof fileManagerWithTrashFile?.trashFile === "function") {
+      this.originalFileManagerTrashFile = this.unwrapWrappedFunction(fileManagerWithTrashFile.trashFile);
+      this.installedFileManagerTrashFileWrapper = this.createDeleteWrapper(this.originalFileManagerTrashFile);
+      writableFileManagerWithTrashFile!.trashFile = this.installedFileManagerTrashFileWrapper;
+    }
 
     this.wrapSaveCommand();
     this.workspaceLayoutSaveController.enable();
@@ -188,6 +228,20 @@ export class AutoSaveController {
       setViewState: SetViewStateFn;
       detach: DetachFn;
     };
+    const vaultWithDeleteMethods = this.app.vault as typeof this.app.vault & {
+      trash?: DeleteFileFn;
+      delete?: DeleteFileFn;
+    };
+    const fileManagerWithTrashFile = (this.app as App & {
+      fileManager?: { trashFile?: DeleteFileFn };
+    }).fileManager;
+    const writableVaultWithDeleteMethods = vaultWithDeleteMethods as {
+      trash?: DeleteFileFn;
+      delete?: DeleteFileFn;
+    };
+    const writableFileManagerWithTrashFile = fileManagerWithTrashFile as {
+      trashFile?: DeleteFileFn;
+    } | undefined;
 
     if (this.originalSave && markdownViewPrototype.save === this.installedSaveWrapper) {
       markdownViewPrototype.save = this.originalSave;
@@ -227,6 +281,24 @@ export class AutoSaveController {
     }
     this.originalDetach = null;
     this.installedDetachWrapper = null;
+
+    if (this.originalVaultTrash && vaultWithDeleteMethods.trash === this.installedVaultTrashWrapper) {
+      writableVaultWithDeleteMethods.trash = this.originalVaultTrash;
+    }
+    this.originalVaultTrash = null;
+    this.installedVaultTrashWrapper = null;
+
+    if (this.originalVaultDelete && vaultWithDeleteMethods.delete === this.installedVaultDeleteWrapper) {
+      writableVaultWithDeleteMethods.delete = this.originalVaultDelete;
+    }
+    this.originalVaultDelete = null;
+    this.installedVaultDeleteWrapper = null;
+
+    if (this.originalFileManagerTrashFile && fileManagerWithTrashFile?.trashFile === this.installedFileManagerTrashFileWrapper) {
+      writableFileManagerWithTrashFile!.trashFile = this.originalFileManagerTrashFile;
+    }
+    this.originalFileManagerTrashFile = null;
+    this.installedFileManagerTrashFileWrapper = null;
 
     this.restoreSaveCommand();
     this.workspaceLayoutSaveController.disable();
@@ -436,6 +508,36 @@ export class AutoSaveController {
     return this.markWrappedFunction(wrappedDetach, originalDetach);
   }
 
+  private createDeleteWrapper(originalDelete: DeleteFileFn): DeleteFileFn {
+    const controller = this;
+
+    const wrappedDelete = async function wrappedDelete(this: unknown, ...args: unknown[]) {
+      const filePath = controller.getTargetFilePathFromDeleteArgs(args);
+      if (!filePath) {
+        return originalDelete.apply(this, args);
+      }
+
+      if (!controller.confirmDeleteIfNeeded(filePath)) {
+        return;
+      }
+
+      if (controller.confirmedDeletionPaths.has(filePath)) {
+        return originalDelete.apply(this, args);
+      }
+
+      controller.confirmedDeletionPaths.add(filePath);
+      controller.discardPendingChangesForDeletedFile(filePath);
+
+      try {
+        return await originalDelete.apply(this, args);
+      } finally {
+        controller.confirmedDeletionPaths.delete(filePath);
+      }
+    };
+
+    return this.markWrappedFunction(wrappedDelete, originalDelete);
+  }
+
   private markWrappedFunction<T extends Function>(wrapper: T, original: T): T {
     const wrappedFunction = wrapper as WrappedFunction<T>;
     wrappedFunction.__ascOriginal = original;
@@ -569,6 +671,15 @@ export class AutoSaveController {
     this.pendingSaveQueue.clear(filePath);
   }
 
+  private discardPendingChangesForDeletedFile(filePath: string): void {
+    for (const leaf of this.findLeavesForFilePath(filePath)) {
+      this.markLeafViewDiscarded(leaf);
+    }
+
+    this.pendingSaveQueue.clear(filePath);
+    this.clearTrackedFileState(filePath);
+  }
+
   private markLeafViewDiscarded(leaf: WorkspaceLeaf): void {
     if (leaf.view instanceof TextFileView) {
       this.discardedViews.add(leaf.view);
@@ -576,7 +687,7 @@ export class AutoSaveController {
   }
 
   private findSiblingLeafForFilePath(currentLeaf: WorkspaceLeaf, filePath: string): WorkspaceLeaf | null {
-    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+    for (const leaf of this.findLeavesForFilePath(filePath)) {
       if (leaf !== currentLeaf && this.getLeafMarkdownFilePath(leaf) === filePath) {
         return leaf;
       }
@@ -608,6 +719,16 @@ export class AutoSaveController {
     return true;
   }
 
+  private confirmDeleteIfNeeded(filePath: string): boolean {
+    if (!this.getSettings().disableAutoSave || !this.pendingSaveQueue.has(filePath)) {
+      return true;
+    }
+
+    const leaf = this.findLeavesForFilePath(filePath)[0] ?? null;
+    const targetWindow = (leaf && this.getLeafWindow(leaf)) ?? window;
+    return targetWindow.confirm("This note has unsaved changes. Delete the file and discard those changes?");
+  }
+
   private getTargetFilePathFromOpenArgs(args: unknown[]): string | null {
     const target = args[0] as { path?: unknown } | undefined;
     return typeof target?.path === "string" ? target.path : null;
@@ -624,6 +745,11 @@ export class AutoSaveController {
     }
 
     return typeof state.state?.file === "string" ? state.state.file : null;
+  }
+
+  private getTargetFilePathFromDeleteArgs(args: unknown[]): string | null {
+    const target = args[0] as { path?: unknown } | undefined;
+    return typeof target?.path === "string" ? target.path : null;
   }
 
   private restorePendingDataIntoLeaf(view: TextFileView & { data?: string }, filePath: string): void {
@@ -728,6 +854,23 @@ export class AutoSaveController {
     }
 
     return view.file?.path ?? null;
+  }
+
+  private findLeavesForFilePath(filePath: string): WorkspaceLeaf[] {
+    return this.app.workspace.getLeavesOfType("markdown")
+      .filter((leaf) => this.getLeafMarkdownFilePath(leaf) === filePath);
+  }
+
+  private clearTrackedFileState(filePath: string): void {
+    const manualSaveRequestTimeoutId = this.manualSaveRequestTimeoutsByPath.get(filePath);
+    if (manualSaveRequestTimeoutId !== undefined) {
+      window.clearTimeout(manualSaveRequestTimeoutId);
+      this.manualSaveRequestTimeoutsByPath.delete(filePath);
+    }
+
+    this.lastSavedDataByPath.delete(filePath);
+    this.cursorPositionByPath.delete(filePath);
+    this.pendingRestoreCountsByPath.delete(filePath);
   }
 
   private clearLeafSwitchingState(leaf: WorkspaceLeaf) {

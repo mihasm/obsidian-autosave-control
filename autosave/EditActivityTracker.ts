@@ -117,6 +117,10 @@ export class EditActivityTracker {
       return false;
     }
 
+    if (targetElement.closest(".inline-title, .inline-title-input, .view-header-title, .workspace-tab-header")) {
+      return false;
+    }
+
     return targetElement.closest(".cm-editor") !== null;
   }
 }

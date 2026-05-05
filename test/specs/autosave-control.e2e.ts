@@ -509,6 +509,36 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
   });
 
+  it("keeps the status saved after renaming an existing file via the title in delayed autosave mode", async () => {
+    const notePath = "status/rename-title-delayed-source.md";
+    const expectedNotePath = "status/rename-title-delayed-renamed.md";
+
+    await enableDelayedAutosave();
+    await ObsidianApp.createAndOpenNote(notePath, "saved content");
+    await ObsidianApp.waitForSavedStatus();
+
+    await ObsidianApp.renameActiveFileViaTitle("rename-title-delayed-renamed");
+
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(expectedNotePath);
+    await expect(await ObsidianApp.readVaultFile(expectedNotePath)).toBe("saved content");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
+  });
+
+  it("keeps the status saved after renaming an existing file via the file manager in delayed autosave mode", async () => {
+    const notePath = "status/rename-sidebar-delayed-source.md";
+    const expectedNotePath = "status/rename-sidebar-delayed-renamed.md";
+
+    await enableDelayedAutosave();
+    await ObsidianApp.createAndOpenNote(notePath, "saved content");
+    await ObsidianApp.waitForSavedStatus();
+
+    await ObsidianApp.renameActiveFileViaFileManager("rename-sidebar-delayed-renamed");
+
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(expectedNotePath);
+    await expect(await ObsidianApp.readVaultFile(expectedNotePath)).toBe("saved content");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
+  });
+
   it("keeps the indicator pending until two different files have both saved", async () => {
     const firstNotePath = "status/two-files-first.md";
     const secondNotePath = "status/two-files-second.md";
@@ -658,6 +688,52 @@ describe("Autosave Control manual scenarios", () => {
 
     await ObsidianApp.runSaveCommand();
     await expectSavedAfterDelay(notePath, "saved base plus unsaved", 4000);
+    await ObsidianApp.restoreConfirm();
+  });
+
+  it("cancels deleting a dirty file in manual-only mode and keeps it pending", async () => {
+    const notePath = "settings/manual-only-delete-cancel.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath, "saved base");
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(notePath, "saved base", 4000);
+
+    await ObsidianApp.typeText(" plus unsaved");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(false);
+
+    await ObsidianApp.deleteActiveFile();
+    const messages = await ObsidianApp.getConfirmMessages();
+
+    await expect(messages[0]).toContain("Delete the file and discard those changes");
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(notePath);
+    await expect(await ObsidianApp.getActiveEditorContent()).toBe("saved base plus unsaved");
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("saved base");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+    await ObsidianApp.restoreConfirm();
+  });
+
+  it("deletes a dirty file in manual-only mode only after confirming discard and clears pending state", async () => {
+    const notePath = "settings/manual-only-delete-confirm.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath, "saved base");
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(notePath, "saved base", 4000);
+
+    await ObsidianApp.typeText(" plus unsaved");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(true);
+
+    await ObsidianApp.deleteActiveFile();
+    const messages = await ObsidianApp.getConfirmMessages();
+
+    await expect(messages[0]).toContain("Delete the file and discard those changes");
+    await ObsidianApp.waitForVaultFileMissing(notePath, 10000);
+    await expect(await ObsidianApp.getActiveFilePath()).not.toBe(notePath);
+    await ObsidianApp.waitForSavedStatus();
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
     await ObsidianApp.restoreConfirm();
   });
 
@@ -873,6 +949,38 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.typeText("x");
     await ObsidianApp.waitForPendingStatus();
     await expect(await ObsidianApp.getStatusIndicatorColor()).toBe("rgb(0, 0, 255)");
+  });
+
+  it("keeps the status saved after renaming an existing file via the title in manual-only mode", async () => {
+    const notePath = "settings/rename-title-manual-source.md";
+    const expectedNotePath = "settings/rename-title-manual-renamed.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath, "saved content");
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(notePath, "saved content", 4000);
+
+    await ObsidianApp.renameActiveFileViaTitle("rename-title-manual-renamed");
+
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(expectedNotePath);
+    await expect(await ObsidianApp.readVaultFile(expectedNotePath)).toBe("saved content");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
+  });
+
+  it("keeps the status saved after renaming an existing file via the file manager in manual-only mode", async () => {
+    const notePath = "settings/rename-sidebar-manual-source.md";
+    const expectedNotePath = "settings/rename-sidebar-manual-renamed.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath, "saved content");
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(notePath, "saved content", 4000);
+
+    await ObsidianApp.renameActiveFileViaFileManager("rename-sidebar-manual-renamed");
+
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(expectedNotePath);
+    await expect(await ObsidianApp.readVaultFile(expectedNotePath)).toBe("saved content");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("All changes saved");
   });
 
   it("loads default settings and works from a fresh clean plugin state", async () => {
