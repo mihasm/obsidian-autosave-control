@@ -824,11 +824,22 @@ class ObsidianApp {
 
   async dispatchBeforeUnload() {
     return browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      const plugin = app?.plugins?.plugins?.["autosave-control"] as {
+        autosaveController?: { beforeUnloadListenersByWindow?: Map<Window, (event: BeforeUnloadEvent) => void> };
+      } | undefined;
+      const beforeUnloadListener = plugin?.autosaveController?.beforeUnloadListenersByWindow?.get(window);
+
+      if (!beforeUnloadListener) {
+        throw new Error("Autosave Control beforeunload listener is not attached to the window.");
+      }
+
       const event = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
-      const dispatchResult = window.dispatchEvent(event);
+      beforeUnloadListener(event);
+
       return {
         defaultPrevented: event.defaultPrevented,
-        dispatchResult,
+        dispatchResult: !event.defaultPrevented,
         returnValue: String(event.returnValue ?? ""),
       };
     });

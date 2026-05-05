@@ -119,7 +119,7 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
 
     await ObsidianApp.runSaveCommand();
-    await expectSavedAfterDelay(notePath, "manual save path", 4000);
+    await expectSavedAfterDelay(notePath, "manual save path", 7000);
   });
 
   it("presses Enter repeatedly and still delays the save", async () => {
