@@ -174,6 +174,20 @@ class ObsidianApp {
     await this.focusEditor(options);
   }
 
+  async requestOpenExistingNote(notePath: string) {
+    await browser.execute(async (nextNotePath: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const file = app.vault.getAbstractFileByPath(nextNotePath);
+
+      if (!file) {
+        throw new Error(`Note '${nextNotePath}' does not exist.`);
+      }
+
+      const leaf = app.workspace.getMostRecentLeaf() ?? app.workspace.getLeaf(true);
+      await leaf.openFile(file);
+    }, notePath);
+  }
+
   async clickSidebarNote(notePath: string, options: { preserveCursor?: boolean } = {}) {
     const folderParts = notePath.split("/").slice(0, -1);
     let currentFolderPath = "";
@@ -762,6 +776,23 @@ class ObsidianApp {
       const leaf = app.workspace.getLeaf("tab");
       await leaf.openFile(file);
     }, notePath, initialContent);
+
+    await this.waitForActiveFile(notePath);
+    await this.focusEditor();
+  }
+
+  async openExistingNoteInNewTab(notePath: string) {
+    await browser.execute(async (nextNotePath: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const file = app.vault.getAbstractFileByPath(nextNotePath);
+
+      if (!file) {
+        throw new Error(`Note '${nextNotePath}' does not exist.`);
+      }
+
+      const leaf = app.workspace.getLeaf("tab");
+      await leaf.openFile(file);
+    }, notePath);
 
     await this.waitForActiveFile(notePath);
     await this.focusEditor();

@@ -46,7 +46,7 @@ export class AutoSaveController {
   private readonly fileSwitchingLeaves = new WeakSet<WorkspaceLeaf>();
   private readonly pendingRestoreCountsByPath = new Map<string, number>();
   private readonly manualSaveRequestTimeoutsByPath = new Map<string, number>();
-  private readonly discardedFilePaths = new Set<string>();
+  private readonly discardedViews = new WeakSet<TextFileView>();
   private readonly lastSavedDataByPath = new Map<string, string>();
   private readonly cursorPositionByPath = new Map<string, EditorPosition>();
 
@@ -153,20 +153,16 @@ export class AutoSaveController {
 
     this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
       this.pendingSaveQueue.refreshAllLatestData();
-      if (!this.getSettings().disableAutoSave && this.pendingSaveQueue.hasAny()) {
-        tasks.add(async () => {
-          await this.pendingSaveQueue.flushAll();
-          await this.workspaceLayoutSaveController.flush();
-          this.isUnloading = true;
-          this.exitApplicationAfterFlush();
-        });
-        return;
-      }
 
       tasks.add(async () => {
+        if (!this.getSettings().disableAutoSave && this.pendingSaveQueue.hasAny()) {
+          await this.pendingSaveQueue.flushAll();
+        }
+
         await this.workspaceLayoutSaveController.flush();
+        this.isUnloading = true;
+        this.exitApplicationAfterFlush();
       });
-      this.isUnloading = true;
     });
 
     this.attachWindowObservers(window);
@@ -267,7 +263,7 @@ export class AutoSaveController {
         return originalSave.apply(this, args);
       }
 
-      if (controller.discardedFilePaths.has(filePath)) {
+      if (controller.discardedViews.has(this as unknown as TextFileView)) {
         dlog("Suppressing save for discarded file", { filePath, args });
         return;
       }
@@ -306,8 +302,8 @@ export class AutoSaveController {
     const controller = this;
 
     const wrappedOnUnloadFile = async function wrappedOnUnloadFile(this: TextFileView, file: TFile) {
-      if (controller.discardedFilePaths.has(file.path)) {
-        controller.discardedFilePaths.delete(file.path);
+      if (controller.discardedViews.has(this)) {
+        controller.discardedViews.delete(this);
         return;
       }
 
@@ -338,7 +334,7 @@ export class AutoSaveController {
         return originalRequestSave.apply(this, args);
       }
 
-      if (controller.discardedFilePaths.has(filePath)) {
+      if (controller.discardedViews.has(this)) {
         dlog("Suppressing requestSave for discarded file", { filePath, args });
         return;
       }
@@ -365,6 +361,10 @@ export class AutoSaveController {
 
     const wrappedOpenFile = async function wrappedOpenFile(this: WorkspaceLeaf, ...args: unknown[]) {
       controller.syncLeafPendingData(this);
+      if (!controller.confirmLeafSwitchIfNeeded(this, controller.getTargetFilePathFromOpenArgs(args))) {
+        return;
+      }
+
       controller.fileSwitchingLeaves.add(this);
 
       try {
@@ -385,6 +385,10 @@ export class AutoSaveController {
 
     const wrappedSetViewState = async function wrappedSetViewState(this: WorkspaceLeaf, ...args: unknown[]) {
       controller.syncLeafPendingData(this);
+      if (!controller.confirmLeafSwitchIfNeeded(this, controller.getTargetFilePathFromViewStateArgs(args))) {
+        return;
+      }
+
       controller.fileSwitchingLeaves.add(this);
 
       try {
@@ -423,10 +427,7 @@ export class AutoSaveController {
           return;
         }
 
-        controller.restoreSavedDataIntoLeaf(this, filePath);
-
-        controller.discardedFilePaths.add(filePath);
-        controller.pendingSaveQueue.clear(filePath);
+        controller.discardPendingChangesInLeaf(this, filePath);
       }
 
       originalDetach.call(this);
@@ -554,6 +555,77 @@ export class AutoSaveController {
     textFileView.data = savedData;
   }
 
+  private discardPendingChangesInLeaf(leaf: WorkspaceLeaf, filePath: string): void {
+    const siblingLeaf = this.findSiblingLeafForFilePath(leaf, filePath);
+    this.markLeafViewDiscarded(leaf);
+
+    if (siblingLeaf && siblingLeaf.view instanceof TextFileView) {
+      this.pendingSaveQueue.touchView(filePath, siblingLeaf.view);
+      this.syncPendingDataForFile(filePath);
+      return;
+    }
+
+    this.restoreSavedDataIntoLeaf(leaf, filePath);
+    this.pendingSaveQueue.clear(filePath);
+  }
+
+  private markLeafViewDiscarded(leaf: WorkspaceLeaf): void {
+    if (leaf.view instanceof TextFileView) {
+      this.discardedViews.add(leaf.view);
+    }
+  }
+
+  private findSiblingLeafForFilePath(currentLeaf: WorkspaceLeaf, filePath: string): WorkspaceLeaf | null {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (leaf !== currentLeaf && this.getLeafMarkdownFilePath(leaf) === filePath) {
+        return leaf;
+      }
+    }
+
+    return null;
+  }
+
+  private confirmLeafSwitchIfNeeded(leaf: WorkspaceLeaf, targetFilePath: string | null): boolean {
+    const currentFilePath = this.getLeafMarkdownFilePath(leaf);
+    if (
+      !this.getSettings().disableAutoSave
+      || !currentFilePath
+      || !this.pendingSaveQueue.has(currentFilePath)
+      || targetFilePath === currentFilePath
+    ) {
+      return true;
+    }
+
+    const targetWindow = this.getLeafWindow(leaf) ?? window;
+    const shouldDiscardUnsavedChanges = targetWindow.confirm(
+      "This note has unsaved changes. Switch notes and discard those changes?"
+    );
+    if (!shouldDiscardUnsavedChanges) {
+      return false;
+    }
+
+    this.discardPendingChangesInLeaf(leaf, currentFilePath);
+    return true;
+  }
+
+  private getTargetFilePathFromOpenArgs(args: unknown[]): string | null {
+    const target = args[0] as { path?: unknown } | undefined;
+    return typeof target?.path === "string" ? target.path : null;
+  }
+
+  private getTargetFilePathFromViewStateArgs(args: unknown[]): string | null {
+    const state = args[0] as {
+      type?: unknown;
+      state?: { file?: unknown };
+    } | undefined;
+
+    if (state?.type !== "markdown") {
+      return null;
+    }
+
+    return typeof state.state?.file === "string" ? state.state.file : null;
+  }
+
   private restorePendingDataIntoLeaf(view: TextFileView & { data?: string }, filePath: string): void {
     if (this.isUnloading) {
       return;
@@ -631,6 +703,8 @@ export class AutoSaveController {
   }
 
   private discardAllPendingChanges(): void {
+    const pendingFilePaths = new Set<string>();
+
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const filePath = this.getLeafMarkdownFilePath(leaf);
       if (!filePath || !this.pendingSaveQueue.has(filePath)) {
@@ -638,7 +712,11 @@ export class AutoSaveController {
       }
 
       this.restoreSavedDataIntoLeaf(leaf, filePath);
-      this.discardedFilePaths.add(filePath);
+      this.markLeafViewDiscarded(leaf);
+      pendingFilePaths.add(filePath);
+    }
+
+    for (const filePath of pendingFilePaths) {
       this.pendingSaveQueue.clear(filePath);
     }
   }

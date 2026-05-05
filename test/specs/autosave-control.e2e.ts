@@ -589,6 +589,78 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.readVaultFile(secondNotePath)).toBe(secondNoteContent);
   });
 
+  it("cancels same-leaf note switching in manual-only mode and keeps the unsaved note visible", async () => {
+    const sourceNotePath = "settings/manual-only-switch-cancel-source.md";
+    const targetNotePath = "settings/manual-only-switch-cancel-target.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(targetNotePath, "saved target");
+    await ObsidianApp.createAndOpenNote(sourceNotePath);
+    await ObsidianApp.typeText("keep me visible");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(false);
+
+    await ObsidianApp.requestOpenExistingNote(targetNotePath);
+    const messages = await ObsidianApp.getConfirmMessages();
+
+    await expect(messages[0]).toContain("discard those changes");
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(sourceNotePath);
+    await expect(await ObsidianApp.getActiveEditorContent()).toBe("keep me visible");
+    await expect(await ObsidianApp.readVaultFile(sourceNotePath)).toBe("");
+    await expect(await ObsidianApp.readVaultFile(targetNotePath)).toBe("saved target");
+    await ObsidianApp.restoreConfirm();
+  });
+
+  it("allows same-leaf note switching in manual-only mode after discarding unsaved changes", async () => {
+    const sourceNotePath = "settings/manual-only-switch-discard-source.md";
+    const targetNotePath = "settings/manual-only-switch-discard-target.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(targetNotePath, "saved target");
+    await ObsidianApp.createAndOpenNote(sourceNotePath);
+    await ObsidianApp.typeText("discard me");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(true);
+
+    await ObsidianApp.openExistingNote(targetNotePath);
+    const messages = await ObsidianApp.getConfirmMessages();
+
+    await expect(messages[0]).toContain("discard those changes");
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(targetNotePath);
+    await expect(await ObsidianApp.getActiveEditorContent()).toBe("saved target");
+    await expect(await ObsidianApp.readVaultFile(sourceNotePath)).toBe("");
+    await expect(await ObsidianApp.readVaultFile(targetNotePath)).toBe("saved target");
+    await ObsidianApp.restoreConfirm();
+  });
+
+  it("keeps another dirty tab unsaved when discarding a duplicate tab in manual-only mode", async () => {
+    const notePath = "settings/manual-only-duplicate-tab.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath);
+    await ObsidianApp.typeText("saved base");
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(notePath, "saved base", 4000);
+
+    await ObsidianApp.typeText(" plus unsaved");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.openExistingNoteInNewTab(notePath);
+    await ObsidianApp.installConfirmStub(true);
+
+    await ObsidianApp.closeActiveTab();
+    const messages = await ObsidianApp.getConfirmMessages();
+
+    await expect(messages[0]).toContain("discard those changes");
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(notePath);
+    await expect(await ObsidianApp.getActiveEditorContent()).toBe("saved base plus unsaved");
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("saved base");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+
+    await ObsidianApp.runSaveCommand();
+    await expectSavedAfterDelay(notePath, "saved base plus unsaved", 4000);
+    await ObsidianApp.restoreConfirm();
+  });
+
   it("flushes deferred workspace.json when manual save succeeds", async () => {
     const firstNotePath = "settings/manual-only-layout-flush-first.md";
     const secondNotePath = "settings/manual-only-layout-flush-second.md";
