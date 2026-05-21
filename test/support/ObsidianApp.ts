@@ -469,6 +469,35 @@ class ObsidianApp {
     });
   }
 
+  async openWikiLink(linkText: string, sourcePath?: string) {
+    await browser.execute(async (nextLinkText: string, nextSourcePath: string | null) => {
+      const app = (window as typeof window & { app: any }).app;
+      const resolvedSourcePath = nextSourcePath ?? app.workspace.getActiveFile()?.path;
+
+      if (!resolvedSourcePath) {
+        throw new Error("No source note is available for wikilink navigation.");
+      }
+
+      await app.workspace.openLinkText(nextLinkText, resolvedSourcePath, false);
+    }, linkText, sourcePath ?? null);
+  }
+
+  async isEditorLineVisible(lineText: string) {
+    return browser.execute((expectedLineText: string) => {
+      const scroller = document.querySelector(".workspace-leaf.mod-active .cm-scroller") as HTMLElement | null;
+      const lineElement = Array.from(document.querySelectorAll(".workspace-leaf.mod-active .cm-line"))
+        .find((element) => element.textContent?.trim() === expectedLineText) as HTMLElement | undefined;
+
+      if (!scroller || !lineElement) {
+        return false;
+      }
+
+      const scrollerRect = scroller.getBoundingClientRect();
+      const lineRect = lineElement.getBoundingClientRect();
+      return lineRect.bottom > scrollerRect.top && lineRect.top < scrollerRect.bottom;
+    }, lineText);
+  }
+
   async selectAllEditorContent() {
     await browser.execute(() => {
       const app = (window as typeof window & { app: any }).app;
@@ -525,6 +554,14 @@ class ObsidianApp {
       const app = (window as typeof window & { app: any }).app;
       const view = app.workspace.activeLeaf?.view;
       await view?.save?.();
+    });
+  }
+
+  async runActiveViewRequestSave() {
+    await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      const view = app.workspace.activeLeaf?.view;
+      view?.requestSave?.();
     });
   }
 

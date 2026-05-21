@@ -108,6 +108,22 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.readVaultFile(notePath)).toBe("already saved");
   });
 
+  it("ignores requestSave when the active note is already clean", async () => {
+    const notePath = "core/clean-request-save.md";
+
+    await enableDelayedAutosave();
+    await ObsidianApp.createAndOpenNote(notePath, "already saved");
+    await ObsidianApp.waitForSavedStatus();
+    const initialMtime = await ObsidianApp.getVaultFileMtimeMs(notePath);
+
+    await ObsidianApp.runActiveViewRequestSave();
+    await browser.pause(1000);
+
+    await expect(await ObsidianApp.getPendingStatusCount()).toBe(0);
+    await expect(await ObsidianApp.getVaultFileMtimeMs(notePath)).toBe(initialMtime);
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("already saved");
+  });
+
   it("uses Obsidian's Save File command to save immediately while changes are pending", async () => {
     const notePath = "core/manual-save-command.md";
 
@@ -422,6 +438,41 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.openExistingNote(originalNotePath, { preserveCursor: true });
 
     await expect(await ObsidianApp.getCursor()).toEqual({ line: 1, ch: 4 });
+  });
+
+  it("keeps header wikilink navigation scrolled to the linked heading", async () => {
+    const sourceNotePath = "switching/header-link-source.md";
+    const targetNotePath = "switching/header-link-target.md";
+    const targetHeader = "Linked Heading";
+    const targetHeaderLine = 41;
+    const targetLinkPath = targetNotePath.replace(/\.md$/u, "");
+    const targetContent = [
+      "top of note",
+      ...Array.from({ length: 40 }, (_, index) => `filler line ${index + 1}`),
+      `# ${targetHeader}`,
+      "linked section",
+    ].join("\n");
+
+    await enableDelayedAutosave();
+    await ObsidianApp.createAndOpenNote(targetNotePath, targetContent);
+    await ObsidianApp.runSaveCommand();
+    await ObsidianApp.waitForSavedStatus();
+    await ObsidianApp.setCursor(0, 0);
+
+    await ObsidianApp.createAndOpenNote(sourceNotePath, `[[${targetLinkPath}#${targetHeader}]]`);
+    await ObsidianApp.openWikiLink(`${targetLinkPath}#${targetHeader}`, sourceNotePath);
+    await ObsidianApp.waitForActiveFile(targetNotePath);
+
+    await browser.waitUntil(async () => {
+      const cursor = await ObsidianApp.getCursor();
+      return Boolean(cursor && cursor.line >= targetHeaderLine && await ObsidianApp.isEditorLineVisible(`# ${targetHeader}`));
+    }, {
+      timeout: 5000,
+      timeoutMsg: "Header wikilink navigation did not reach the linked heading.",
+    });
+
+    await expect(await ObsidianApp.isEditorLineVisible(`# ${targetHeader}`)).toBe(true);
+    await expect((await ObsidianApp.getCursor())?.line).toBeGreaterThanOrEqual(targetHeaderLine);
   });
 
   it("closes a note tab with pending edits and saves the note", async () => {
