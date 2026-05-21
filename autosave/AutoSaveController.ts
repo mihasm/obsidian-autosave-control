@@ -191,19 +191,21 @@ export class AutoSaveController {
       this.attachWindowObservers(this.getViewWindow(leaf.view));
     });
 
-    this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
-      this.pendingSaveQueue.refreshAllLatestData();
+    if (!Platform.isMobileApp) {
+      this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
+        this.pendingSaveQueue.refreshAllLatestData();
 
-      tasks.add(async () => {
-        if (!this.getSettings().disableAutoSave && this.pendingSaveQueue.hasAny()) {
-          await this.pendingSaveQueue.flushAll();
-        }
+        tasks.add(async () => {
+          if (!this.getSettings().disableAutoSave && this.pendingSaveQueue.hasAny()) {
+            await this.pendingSaveQueue.flushAll();
+          }
 
-        await this.workspaceLayoutSaveController.flush();
-        this.isUnloading = true;
-        this.exitApplicationAfterFlush();
+          await this.workspaceLayoutSaveController.flush();
+          this.isUnloading = true;
+          this.exitApplicationAfterFlush();
+        });
       });
-    });
+    }
 
     this.attachWindowObservers(window);
 
