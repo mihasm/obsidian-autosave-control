@@ -102,6 +102,8 @@ Colors and the size of the icon can be customized in settings.
 
 ## Testing
 
+### Desktop
+
 Setup:
 
 - Run `npm install`.
@@ -119,28 +121,26 @@ Run one specific test:
 npx wdio run ./wdio.conf.mts --spec ./test/specs/autosave-control.e2e.ts --mochaOpts.grep "stops typing and waits for exactly one save after the configured delay"
 ```
 
-### Android emulator tests
-
-This repo also has a separate Android/Appium test path for emulator-based debugging.
+### Android
 
 Setup:
 
-- Install Android Studio and create an Android Virtual Device named `obsidian_test`.
-- Ensure both `adb` and the Android emulator tools are on your `PATH`.
+- You need the Android command-line SDK tools installed, specifically:
+  - `adb`
+  - `emulator`
+- You need at least one Android Virtual Device already created on your machine.
+- By default this suite tries to start an emulator named `obsidian_test`.
 - If you use a different AVD name, export `OBSIDIAN_ANDROID_AVD` before running the suite.
 
-Run the Android smoke test:
-
 ```bash
-npm run wdio:android:smoke
+npm run wdio:android
 ```
 
-This smoke suite intentionally stops at app startup.
+with different AVD:
 
-- It boots the emulator.
-- It installs Obsidian directly through `wdio-obsidian-service`.
-- It waits for the Android startup screen and captures a screenshot plus `adb logcat` output.
-- It does not open a vault by default, which keeps the diagnostic run bounded and avoids hanging in the known Android vault-exit bug path.
+```bash
+export OBSIDIAN_ANDROID_AVD="avd_name" && npm run wdio:android
+```
 
 ## License
 

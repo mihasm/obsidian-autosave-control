@@ -5,7 +5,7 @@ const androidAvd = process.env.OBSIDIAN_ANDROID_AVD ?? "obsidian_test";
 export const config = {
   runner: "local",
   framework: "mocha",
-  specs: ["./test/specs/android/**/*.e2e.ts"],
+  specs: ["./test/specs/android.e2e.ts"],
   maxInstances: 1,
   capabilities: [
     {
