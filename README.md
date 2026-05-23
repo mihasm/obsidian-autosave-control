@@ -102,44 +102,30 @@ Colors and the size of the icon can be customized in settings.
 
 ## Testing
 
-### Desktop
-
-Setup:
-
 - Run `npm install`.
-- The first test run downloads Obsidian into `.obsidian-cache/`.
 
-Run tests:
-
-```bash
-npm run wdio
-```
-
-Run one specific test:
+Desktop:
 
 ```bash
-npx wdio run ./wdio.conf.mts --spec ./test/specs/autosave-control.e2e.ts --mochaOpts.grep "stops typing and waits for exactly one save after the configured delay"
+npm run wdio:desktop
 ```
 
-### Android
-
-Setup:
-
-- You need the Android command-line SDK tools installed, specifically:
-  - `adb`
-  - `emulator`
-- You need at least one Android Virtual Device already created on your machine.
-- By default this suite tries to start an emulator named `obsidian_test`.
-- If you use a different AVD name, export `OBSIDIAN_ANDROID_AVD` before running the suite.
+Android:
 
 ```bash
 npm run wdio:android
 ```
 
-with different AVD:
+All tests:
 
 ```bash
-export OBSIDIAN_ANDROID_AVD="avd_name" && npm run wdio:android
+npm run wdio
+```
+
+One test:
+
+```bash
+npx wdio run ./wdio.conf.mts --spec ./test/specs/autosave-control.e2e.ts --mochaOpts.grep "stops typing and waits for exactly one save after the configured delay"
 ```
 
 ## License
