@@ -434,6 +434,8 @@ export class AutoSaveController {
     const controller = this;
 
     const wrappedOpenFile = async function wrappedOpenFile(this: WorkspaceLeaf, ...args: unknown[]) {
+      const shouldRestoreCursor = !controller.hasSubpathNavigationInOpenArgs(args);
+
       controller.syncLeafPendingData(this);
       if (!controller.confirmLeafSwitchIfNeeded(this, controller.getTargetFilePathFromOpenArgs(args))) {
         return;
@@ -446,7 +448,7 @@ export class AutoSaveController {
       } finally {
         void controller.captureLeafSavedData(this);
         controller.schedulePendingDataRestoreInLeaf(this);
-        controller.scheduleLeafCursorRestore(this);
+        controller.scheduleLeafCursorRestore(this, shouldRestoreCursor);
         controller.clearLeafSwitchingState(this);
       }
     };
@@ -458,6 +460,8 @@ export class AutoSaveController {
     const controller = this;
 
     const wrappedSetViewState = async function wrappedSetViewState(this: WorkspaceLeaf, ...args: unknown[]) {
+      const shouldRestoreCursor = !controller.hasSubpathNavigationInViewStateArgs(args);
+
       controller.syncLeafPendingData(this);
       if (!controller.confirmLeafSwitchIfNeeded(this, controller.getTargetFilePathFromViewStateArgs(args))) {
         return;
@@ -470,7 +474,7 @@ export class AutoSaveController {
       } finally {
         void controller.captureLeafSavedData(this);
         controller.schedulePendingDataRestoreInLeaf(this);
-        controller.scheduleLeafCursorRestore(this);
+        controller.scheduleLeafCursorRestore(this, shouldRestoreCursor);
         controller.clearLeafSwitchingState(this);
       }
     };
@@ -736,6 +740,15 @@ export class AutoSaveController {
     return typeof target?.path === "string" ? target.path : null;
   }
 
+  private hasSubpathNavigationInOpenArgs(args: unknown[]): boolean {
+    const openState = args[1] as {
+      subpath?: unknown;
+      eState?: { subpath?: unknown };
+    } | undefined;
+
+    return typeof openState?.subpath === "string" || typeof openState?.eState?.subpath === "string";
+  }
+
   private getTargetFilePathFromViewStateArgs(args: unknown[]): string | null {
     const state = args[0] as {
       type?: unknown;
@@ -747,6 +760,15 @@ export class AutoSaveController {
     }
 
     return typeof state.state?.file === "string" ? state.state.file : null;
+  }
+
+  private hasSubpathNavigationInViewStateArgs(args: unknown[]): boolean {
+    const state = args[0] as {
+      state?: { subpath?: unknown };
+      eState?: { subpath?: unknown };
+    } | undefined;
+
+    return typeof state?.state?.subpath === "string" || typeof state?.eState?.subpath === "string";
   }
 
   private getTargetFilePathFromDeleteArgs(args: unknown[]): string | null {
@@ -791,9 +813,9 @@ export class AutoSaveController {
     }, 0);
   }
 
-  private scheduleLeafCursorRestore(leaf: WorkspaceLeaf): void {
+  private scheduleLeafCursorRestore(leaf: WorkspaceLeaf, shouldRestoreCursor = true): void {
     window.setTimeout(() => {
-      if (this.isUnloading) {
+      if (this.isUnloading || !shouldRestoreCursor) {
         return;
       }
 
