@@ -5,6 +5,7 @@ export const config = {
   framework: "mocha",
   specs: ["./test/specs/**/*.e2e.ts"],
   maxInstances: 1,
+  bail: 0,
   capabilities: [
     {
       browserName: "obsidian",
@@ -21,6 +22,7 @@ export const config = {
   cacheDir: path.resolve(".obsidian-cache"),
   mochaOpts: {
     ui: "bdd",
+    bail: false,
     timeout: 120000,
   },
   logLevel: "warn",

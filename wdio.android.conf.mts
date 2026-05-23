@@ -1,19 +1,20 @@
 import * as path from "node:path";
 
-const androidAvd = process.env.OBSIDIAN_ANDROID_AVD ?? "obsidian_test";
+const androidAvd = process.env.OBSIDIAN_ANDROID_AVD;
 
 export const config = {
   runner: "local",
   framework: "mocha",
   specs: ["./test/specs/android.e2e.ts"],
   maxInstances: 1,
+  bail: 0,
   capabilities: [
     {
       browserName: "obsidian",
       browserVersion: "latest",
       platformName: "Android",
       "appium:automationName": "UiAutomator2",
-      "appium:avd": androidAvd,
+      ...(androidAvd ? { "appium:avd": androidAvd } : {}),
       "appium:noReset": true,
       "appium:autoGrantPermissions": true,
       "appium:autoWebview": false,
@@ -42,6 +43,7 @@ export const config = {
   waitforInterval: 250,
   mochaOpts: {
     ui: "bdd",
+    bail: false,
     timeout: 180000,
   },
   logLevel: "warn",

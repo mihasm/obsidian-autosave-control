@@ -8,25 +8,17 @@ const timestamp = new Date().toISOString().replace(/[.:]/gu, "-");
 const logcatPath = path.join(outputDir, `logcat-${timestamp}.log`);
 const wdioArgs = ["wdio", "run", "./wdio.android.conf.mts", ...process.argv.slice(2)];
 const ANDROID_BOOT_TIMEOUT_MS = 5 * 60 * 1000;
-const ANDROID_RUN_TIMEOUT_MS = Number(process.env.OBSIDIAN_ANDROID_RUN_TIMEOUT_MS ?? 10000);
+const ANDROID_RUN_TIMEOUT_MS = Number(process.env.OBSIDIAN_ANDROID_RUN_TIMEOUT_MS ?? 120000);
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function hasBinary(binaryName) {
+function resolveBinary(binaryName, env = process.env) {
   const result = spawnSync("which", [binaryName], {
     cwd: process.cwd(),
     encoding: "utf8",
-  });
-
-  return result.status === 0 && Boolean(result.stdout.trim());
-}
-
-function resolveBinary(binaryName) {
-  const result = spawnSync("which", [binaryName], {
-    cwd: process.cwd(),
-    encoding: "utf8",
+    env,
   });
 
   if (result.status !== 0) {
@@ -35,6 +27,21 @@ function resolveBinary(binaryName) {
 
   const resolvedPath = result.stdout.trim();
   return resolvedPath ? resolvedPath : null;
+}
+
+function getConfiguredSdkRoot() {
+  return process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME ?? null;
+}
+
+function getAndroidEnv(sdkRoot) {
+  return {
+    ...process.env,
+    ...(sdkRoot ? {
+      ANDROID_HOME: sdkRoot,
+      ANDROID_SDK_ROOT: sdkRoot,
+      PATH: `${path.join(sdkRoot, "platform-tools")}:${path.join(sdkRoot, "emulator")}:${process.env.PATH ?? ""}`,
+    } : {}),
+  };
 }
 
 function listConnectedDevices(adbPath, env) {
@@ -54,6 +61,11 @@ function listConnectedDevices(adbPath, env) {
     .filter((line) => line && !line.startsWith("List of devices attached"))
     .map((line) => line.split(/\s+/u)[0])
     .filter(Boolean);
+}
+
+function getNewDeviceSerial(beforeDevices, afterDevices) {
+  const knownDevices = new Set(beforeDevices);
+  return afterDevices.find((device) => !knownDevices.has(device)) ?? null;
 }
 
 function getSdkRoot(adbPath) {
@@ -96,12 +108,16 @@ function resetObsidianProcess(adbPath, env) {
 }
 
 async function ensureDeviceReady(adbPath, env, avdName) {
+  let selectedAvd = avdName;
   const connectedDevices = listConnectedDevices(adbPath, env);
+  let startedEmulator = false;
+  let deviceSerial = connectedDevices[0] ?? null;
+
   if (connectedDevices.length === 0) {
     const sdkRoot = getSdkRoot(adbPath);
     const emulatorPath = getEmulatorPath(sdkRoot);
     const availableAvds = getAvailableAvds(emulatorPath, env);
-    const selectedAvd = avdName || availableAvds[0];
+    selectedAvd = selectedAvd || availableAvds[0];
 
     if (!selectedAvd) {
       throw new Error("No Android Virtual Device is available. Create an AVD in Android Studio first.");
@@ -115,6 +131,7 @@ async function ensureDeviceReady(adbPath, env, avdName) {
       env,
     });
     emulatorProcess.unref();
+    startedEmulator = true;
   }
 
   const startedAt = Date.now();
@@ -133,8 +150,13 @@ async function ensureDeviceReady(adbPath, env, avdName) {
     const bootCompleted = bootCompletedResult.status === 0 && bootCompletedResult.stdout.trim() === "1";
 
     if (bootCompleted) {
-      console.log(`Android device is ready: ${devices[0]}`);
-      return;
+      deviceSerial = startedEmulator ? (getNewDeviceSerial(connectedDevices, devices) ?? devices[0] ?? null) : (devices[0] ?? null);
+      console.log(`Android device is ready: ${deviceSerial ?? devices[0]}`);
+      return {
+        deviceSerial,
+        selectedAvd,
+        startedEmulator,
+      };
     }
 
     await wait(2000);
@@ -143,55 +165,96 @@ async function ensureDeviceReady(adbPath, env, avdName) {
   throw new Error(`Timed out waiting ${ANDROID_BOOT_TIMEOUT_MS}ms for the Android emulator to boot.`);
 }
 
+function stopEmulator(adbPath, env, deviceSerial) {
+  if (!deviceSerial || !deviceSerial.startsWith("emulator-")) {
+    return;
+  }
+
+  const result = spawnSync(adbPath, ["-s", deviceSerial, "emu", "kill"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env,
+  });
+
+  if (result.status !== 0) {
+    const details = (result.stderr || result.stdout || "unknown adb error").trim();
+    console.warn(`Failed to stop Android emulator '${deviceSerial}': ${details}`);
+    return;
+  }
+
+  console.log(`Stopped Android emulator '${deviceSerial}'`);
+}
+
 async function main() {
   await fsp.mkdir(outputDir, { recursive: true });
 
   let logcatProcess = null;
   let logcatStream = null;
-  const adbPath = resolveBinary("adb");
-  const sdkRoot = adbPath ? getSdkRoot(adbPath) : process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME ?? null;
-  const env = {
-    ...process.env,
-    ...(sdkRoot ? {
-      ANDROID_HOME: sdkRoot,
-      ANDROID_SDK_ROOT: sdkRoot,
-      PATH: `${path.join(sdkRoot, "platform-tools")}:${path.join(sdkRoot, "emulator")}:${process.env.PATH ?? ""}`,
-    } : {}),
-  };
+  let ownedEmulatorSerial = null;
+  let exitCode = 1;
+  const configuredSdkRoot = getConfiguredSdkRoot();
+  let env = getAndroidEnv(configuredSdkRoot);
+  const adbPath = resolveBinary("adb", env);
+  const sdkRoot = adbPath ? getSdkRoot(adbPath) : configuredSdkRoot;
+  env = getAndroidEnv(sdkRoot);
 
-  if (adbPath) {
-    await ensureDeviceReady(adbPath, env, process.env.OBSIDIAN_ANDROID_AVD ?? null);
-    resetObsidianProcess(adbPath, env);
+  try {
+    if (adbPath) {
+      const deviceInfo = await ensureDeviceReady(adbPath, env, process.env.OBSIDIAN_ANDROID_AVD ?? null);
+      if (deviceInfo.selectedAvd) {
+        env.OBSIDIAN_ANDROID_AVD = deviceInfo.selectedAvd;
+      }
+      if (deviceInfo.startedEmulator) {
+        ownedEmulatorSerial = deviceInfo.deviceSerial;
+      }
+      resetObsidianProcess(adbPath, env);
 
-    spawnSync(adbPath, ["logcat", "-c"], {
+      spawnSync(adbPath, ["logcat", "-c"], {
+        cwd: process.cwd(),
+        stdio: "inherit",
+        env,
+      });
+
+      logcatStream = fs.createWriteStream(logcatPath, { flags: "a" });
+      logcatProcess = spawn(adbPath, ["logcat", "-v", "time"], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+        env,
+      });
+      logcatProcess.stdout.pipe(logcatStream);
+      logcatProcess.stderr.pipe(logcatStream);
+      console.log(`Capturing adb logcat to ${logcatPath}`);
+    } else {
+      console.warn("adb was not found on PATH. Android log capture is disabled for this run.");
+    }
+
+    const wdioProcess = spawn("npx", wdioArgs, {
       cwd: process.cwd(),
-      stdio: "inherit",
+      stdio: ["inherit", "pipe", "pipe"],
+      shell: process.platform === "win32",
       env,
     });
 
-    logcatStream = fs.createWriteStream(logcatPath, { flags: "a" });
-    logcatProcess = spawn(adbPath, ["logcat", "-v", "time"], {
-      cwd: process.cwd(),
-      stdio: ["ignore", "pipe", "pipe"],
-      env,
-    });
-    logcatProcess.stdout.pipe(logcatStream);
-    logcatProcess.stderr.pipe(logcatStream);
-    console.log(`Capturing adb logcat to ${logcatPath}`);
-  } else {
-    console.warn("adb was not found on PATH. Android log capture is disabled for this run.");
-  }
+    const resetTimeout = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        console.error(`Android WDIO run was idle for ${ANDROID_RUN_TIMEOUT_MS}ms and will be terminated.`);
+        try {
+          wdioProcess.kill("SIGTERM");
+        } catch {
+          // already exited
+        }
+      }, ANDROID_RUN_TIMEOUT_MS);
+    };
 
-  const wdioProcess = spawn("npx", wdioArgs, {
-    cwd: process.cwd(),
-    stdio: ["inherit", "pipe", "pipe"],
-    shell: process.platform === "win32",
-    env,
-  });
+    const forwardOutput = (chunk, stream) => {
+      stream.write(chunk);
+      resetTimeout();
+    };
 
-  const resetTimeout = () => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => {
+    let timedOut = false;
+    let timeoutId = setTimeout(() => {
       timedOut = true;
       console.error(`Android WDIO run was idle for ${ANDROID_RUN_TIMEOUT_MS}ms and will be terminated.`);
       try {
@@ -200,50 +263,35 @@ async function main() {
         // already exited
       }
     }, ANDROID_RUN_TIMEOUT_MS);
-  };
 
-  const forwardOutput = (chunk, stream) => {
-    stream.write(chunk);
-    resetTimeout();
-  };
-
-  let timedOut = false;
-  let timeoutId = setTimeout(() => {
-    timedOut = true;
-    console.error(`Android WDIO run was idle for ${ANDROID_RUN_TIMEOUT_MS}ms and will be terminated.`);
-    try {
-      wdioProcess.kill("SIGTERM");
-    } catch {
-      // already exited
-    }
-  }, ANDROID_RUN_TIMEOUT_MS);
-
-  wdioProcess.stdout.on("data", (chunk) => {
-    forwardOutput(chunk, process.stdout);
-  });
-  wdioProcess.stderr.on("data", (chunk) => {
-    forwardOutput(chunk, process.stderr);
-  });
-
-  const exitCode = await new Promise((resolve) => {
-    wdioProcess.once("exit", (code) => {
-      clearTimeout(timeoutId);
-      resolve(timedOut ? 124 : (code ?? 1));
+    wdioProcess.stdout.on("data", (chunk) => {
+      forwardOutput(chunk, process.stdout);
     });
-  });
+    wdioProcess.stderr.on("data", (chunk) => {
+      forwardOutput(chunk, process.stderr);
+    });
 
-  if (logcatProcess) {
-    logcatProcess.kill("SIGTERM");
-  }
-  if (logcatStream) {
-    await new Promise((resolve) => logcatStream.end(resolve));
+    exitCode = await new Promise((resolve) => {
+      wdioProcess.once("exit", (code) => {
+        clearTimeout(timeoutId);
+        resolve(timedOut ? 124 : (code ?? 1));
+      });
+    });
+  } finally {
+    if (logcatProcess) {
+      logcatProcess.kill("SIGTERM");
+    }
+    if (logcatStream) {
+      await new Promise((resolve) => logcatStream.end(resolve));
+    }
+
+    if (adbPath) {
+      console.log(`Saved Android logs to ${logcatPath}`);
+      stopEmulator(adbPath, env, ownedEmulatorSerial);
+    }
   }
 
-  if (adbPath) {
-    console.log(`Saved Android logs to ${logcatPath}`);
-  }
-
-  process.exit(Number(exitCode));
+  return Number(exitCode);
 }
 
-await main();
+process.exit(await main());

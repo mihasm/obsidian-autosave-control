@@ -473,22 +473,48 @@ class ObsidianApp {
     await browser.execute(async (nextLinkText: string, nextSourcePath: string | null) => {
       const app = (window as typeof window & { app: any }).app;
       const resolvedSourcePath = nextSourcePath ?? app.workspace.getActiveFile()?.path;
+      const headingSeparatorIndex = nextLinkText.indexOf("#");
+      const linkPath = headingSeparatorIndex >= 0 ? nextLinkText.slice(0, headingSeparatorIndex) : nextLinkText;
+      const subpath = headingSeparatorIndex >= 0 ? nextLinkText.slice(headingSeparatorIndex) : null;
 
       if (!resolvedSourcePath) {
         throw new Error("No source note is available for wikilink navigation.");
       }
 
       await app.workspace.openLinkText(nextLinkText, resolvedSourcePath, false);
+
+      if (!subpath) {
+        return;
+      }
+
+      const targetFile = app.metadataCache.getFirstLinkpathDest(linkPath, resolvedSourcePath)
+        ?? app.vault.getAbstractFileByPath(`${linkPath}.md`)
+        ?? app.vault.getAbstractFileByPath(linkPath);
+      const targetLeaf = app.workspace.getMostRecentLeaf() ?? app.workspace.activeLeaf;
+
+      if (!targetFile || !targetLeaf) {
+        throw new Error(`Unable to resolve wikilink target '${nextLinkText}'.`);
+      }
+
+      await targetLeaf.openFile(targetFile, {
+        eState: { subpath },
+        subpath,
+      });
     }, linkText, sourcePath ?? null);
   }
 
   async isEditorLineVisible(lineText: string) {
     return browser.execute((expectedLineText: string) => {
-      const scroller = document.querySelector(".workspace-leaf.mod-active .cm-scroller") as HTMLElement | null;
-      const lineElement = Array.from(document.querySelectorAll(".workspace-leaf.mod-active .cm-line"))
-        .find((element) => element.textContent?.trim() === expectedLineText) as HTMLElement | undefined;
+      const activeLeaf = document.querySelector(".workspace-leaf.mod-active") as HTMLElement | null;
+      const scroller = activeLeaf?.querySelector(".cm-scroller, .markdown-preview-view, .view-content") as HTMLElement | null;
+      const normalizedHeadingText = expectedLineText.replace(/^#+\s+/u, "").trim();
+      const lineElement = Array.from(activeLeaf?.querySelectorAll(".cm-line, .markdown-preview-view h1, .markdown-preview-view h2, .markdown-preview-view h3, .markdown-preview-view h4, .markdown-preview-view h5, .markdown-preview-view h6") ?? [])
+        .find((element) => {
+          const elementText = element.textContent?.trim();
+          return elementText === expectedLineText || elementText === normalizedHeadingText;
+        }) as HTMLElement | undefined;
 
-      if (!scroller || !lineElement) {
+      if (!activeLeaf || !scroller || !lineElement) {
         return false;
       }
 
@@ -709,12 +735,12 @@ class ObsidianApp {
     });
   }
 
-  async waitForSavedStatus() {
+  async waitForSavedStatus(timeout = 4000) {
     const statusIndicator = await $(".save-status-icon");
     await browser.waitUntil(async () => {
       return (await statusIndicator.getAttribute("class"))?.includes("asc-saved") ?? false;
     }, {
-      timeout: 10000,
+      timeout,
       timeoutMsg: "Saved status indicator did not appear in time.",
     });
   }

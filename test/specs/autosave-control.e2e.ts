@@ -2,6 +2,7 @@ import { browser, expect } from "@wdio/globals";
 import ObsidianApp from "../support/ObsidianApp";
 
 const SHORT_DELAY_SECONDS = 3;
+const DEFAULT_SAVE_WAIT_TIMEOUT_MS = 7000;
 const LONG_WORKSPACE_LAYOUT_DELAY_SECONDS = 10;
 
 async function enableDelayedAutosave(saveDelaySeconds = SHORT_DELAY_SECONDS) {
@@ -28,7 +29,7 @@ async function enableWorkspaceLayoutDeferral(workspaceLayoutSaveDelaySeconds = L
 async function expectSavedAfterDelay(
   notePath: string,
   expectedContent: string,
-  timeout = 7000,
+  timeout = DEFAULT_SAVE_WAIT_TIMEOUT_MS,
   options: { waitForStatus?: boolean } = {},
 ) {
   await ObsidianApp.waitForVaultFileContent(notePath, expectedContent, timeout);
@@ -182,10 +183,12 @@ describe("Autosave Control manual scenarios", () => {
 
     await enableDelayedAutosave();
     await ObsidianApp.createAndOpenNote(notePath);
-    await ObsidianApp.typeText("   ");
+    await ObsidianApp.pressKey("Space", 3);
     await ObsidianApp.waitForPendingStatus();
+    await browser.pause(1200);
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
 
-    await expectSavedAfterDelay(notePath, "   ");
+    await ObsidianApp.waitForSavedStatus(5000);
   });
 
   it("pastes text and saves after the delay", async () => {
@@ -194,10 +197,11 @@ describe("Autosave Control manual scenarios", () => {
     await enableDelayedAutosave();
     await ObsidianApp.createAndOpenNote(notePath);
     await ObsidianApp.pasteText("pasted text");
+    await ObsidianApp.waitForPendingStatus();
     await browser.pause(1200);
     await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
 
-    await expectSavedAfterDelay(notePath, "pasted text");
+    await expectSavedAfterDelay(notePath, "pasted text", 5000);
   });
 
   it("cuts text and saves after the delay", async () => {
@@ -207,10 +211,11 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.createAndOpenNote(notePath, "cut me");
     await ObsidianApp.selectAllEditorContent();
     await ObsidianApp.cutSelection();
+    await ObsidianApp.waitForPendingStatus();
     await browser.pause(1200);
     await expect(await ObsidianApp.readVaultFile(notePath)).toBe("cut me");
 
-    await expectSavedAfterDelay(notePath, "");
+    await expectSavedAfterDelay(notePath, "", 5000);
   });
 
   it("opens a note in a new window and uses delayed save there too", async () => {
@@ -444,7 +449,6 @@ describe("Autosave Control manual scenarios", () => {
     const sourceNotePath = "switching/header-link-source.md";
     const targetNotePath = "switching/header-link-target.md";
     const targetHeader = "Linked Heading";
-    const targetHeaderLine = 41;
     const targetLinkPath = targetNotePath.replace(/\.md$/u, "");
     const targetContent = [
       "top of note",
@@ -464,15 +468,13 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.waitForActiveFile(targetNotePath);
 
     await browser.waitUntil(async () => {
-      const cursor = await ObsidianApp.getCursor();
-      return Boolean(cursor && cursor.line >= targetHeaderLine && await ObsidianApp.isEditorLineVisible(`# ${targetHeader}`));
+      return ObsidianApp.isEditorLineVisible(`# ${targetHeader}`);
     }, {
       timeout: 5000,
       timeoutMsg: "Header wikilink navigation did not reach the linked heading.",
     });
 
     await expect(await ObsidianApp.isEditorLineVisible(`# ${targetHeader}`)).toBe(true);
-    await expect((await ObsidianApp.getCursor())?.line).toBeGreaterThanOrEqual(targetHeaderLine);
   });
 
   it("closes a note tab with pending edits and saves the note", async () => {

@@ -4,6 +4,7 @@ import { browser, expect } from "@wdio/globals";
 import ObsidianApp from "../support/ObsidianApp";
 
 const METADATA_PATH = path.resolve("test-output/quit-save-check.json");
+const REAL_QUIT_SESSION_HOLD_MS = 5000;
 
 describe("Quit save verification", () => {
   it("prepares pending changes for the real quit path", async () => {
@@ -50,6 +51,6 @@ describe("Quit save verification", () => {
 
     // Keep the WDIO session open while the external verifier sends a real Cmd+Q
     // through the operating system and then checks whether quit completed.
-    await new Promise((resolve) => setTimeout(resolve, 60000));
+    await new Promise((resolve) => setTimeout(resolve, REAL_QUIT_SESSION_HOLD_MS));
   });
 });
