@@ -82,6 +82,20 @@ Colors and the size of the icon can be customized in settings.
 
 ## Installation
 
+### Install with BRAT
+
+This plugin can be installed and auto-updated with [BRAT (Beta Reviewers Auto-update Tester)](https://github.com/TfTHacker/obsidian42-brat):
+
+1. In Obsidian, install **BRAT** from **Settings -> Community plugins -> Browse**.
+2. Open the command palette and run `BRAT: Plugins: Add a beta plugin for testing (with or without version)`.
+3. Enter this repository path: `mihasm/obsidian-autosave-control`
+4. Choose `Latest version` if you want BRAT to keep the plugin updated automatically.
+5. Confirm the install.
+
+BRAT installs the plugin from this repository's GitHub releases and can update it for you later.
+
+### Manual install
+
 1. Download the latest release from GitHub:  
    https://github.com/mihasm/obsidian-autosave-control/releases
 
