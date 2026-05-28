@@ -9,6 +9,10 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout code
@@ -19,6 +23,13 @@ jobs:
         run: |
           npm install
           npm run build # Replace with your actual build command
+
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            ./main.js
+            ./manifest.json
 
       - name: Create GitHub Release
         id: create_release
