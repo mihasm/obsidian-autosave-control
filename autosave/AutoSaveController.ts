@@ -1002,18 +1002,11 @@ export class AutoSaveController {
       electron?.remote?.app?.exit?.(0);
       return;
     } catch {
-      // fall through to softer quit paths
+      // fall through to softer quit path
     }
 
     try {
       electron?.remote?.app?.quit?.();
-      return;
-    } catch {
-      // fall through to softer quit paths
-    }
-
-    try {
-      electron?.ipcRenderer?.send?.("app:quit");
     } catch {
       // no supported explicit quit path available
     }
