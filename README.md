@@ -82,6 +82,18 @@ Colors and the size of the icon can be customized in settings.
 
 ## Installation
 
+### Install from Obsidian Community Plugins directory
+
+This plugin is available in the official Obsidian Community Plugins directory:
+
+https://community.obsidian.md/plugins/autosave-control
+
+1. In Obsidian, open **Settings -> Community plugins**.
+2. Select **Browse**.
+3. Search for `Autosave Control`.
+4. Install the plugin.
+5. Enable the plugin.
+
 ### Install with BRAT
 
 This plugin can be installed and auto-updated with [BRAT (Beta Reviewers Auto-update Tester)](https://github.com/TfTHacker/obsidian42-brat):
