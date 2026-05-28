@@ -1,10 +1,10 @@
 {
-  "id": "autosave-control",
-  "name": "Autosave Control",
-  "version": "0.0.17",
-  "minAppVersion": "0.15.0",
-  "description": "Delay autosave until editing has stopped for a chosen number of seconds.",
-  "author": "Miha Smrekar",
-  "authorUrl": "https://github.com/mihasm/",
-  "isDesktopOnly": false
+	"id": "autosave-control",
+	"name": "Autosave Control",
+	"version": "0.0.18",
+	"minAppVersion": "0.15.0",
+	"description": "Delay autosave until editing has stopped for a chosen number of seconds.",
+	"author": "Miha Smrekar",
+	"authorUrl": "https://github.com/mihasm/",
+	"isDesktopOnly": false
 }
