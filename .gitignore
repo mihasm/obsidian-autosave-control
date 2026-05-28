@@ -26,7 +26,6 @@ dist/
 *.tsbuildinfo
 
 # Optional dependency files
-package-lock.json
 yarn.lock
 
 # WDIO Obsidian Service cache
