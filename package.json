@@ -39,7 +39,6 @@
 		"@wdio/spec-reporter": "^9.27.0",
 		"appium": "^3.4.2",
 		"appium-uiautomator2-driver": "^7.5.0",
-		"builtin-modules": "3.3.0",
 		"esbuild": "0.17.3",
 		"expect-webdriverio": "^5.6.5",
 		"mocha": "^11.7.5",
@@ -51,6 +50,6 @@
 		"wdio-obsidian-service": "^3.0.2"
 	},
 	"dependencies": {
-		"watch": "^1.0.2"
+		"watch": "1.0.2"
 	}
 }
