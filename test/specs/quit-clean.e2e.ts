@@ -3,7 +3,7 @@ import * as path from "node:path";
 import ObsidianApp from "../support/ObsidianApp";
 
 const METADATA_PATH = path.resolve("test-output/quit-clean-check.json");
-const REAL_QUIT_SESSION_HOLD_MS = 5000;
+const REAL_QUIT_SESSION_HOLD_MS = 30000;
 
 describe("Clean quit verification", () => {
   it("prepares a real quit with no pending changes", async () => {

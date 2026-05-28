@@ -4,7 +4,7 @@ import { browser, expect } from "@wdio/globals";
 import ObsidianApp from "../support/ObsidianApp";
 
 const METADATA_PATH = path.resolve("test-output/quit-save-check.json");
-const REAL_QUIT_SESSION_HOLD_MS = 5000;
+const REAL_QUIT_SESSION_HOLD_MS = 30000;
 
 describe("Quit save verification", () => {
   it("prepares pending changes for the real quit path", async () => {

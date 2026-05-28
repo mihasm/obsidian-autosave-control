@@ -52,41 +52,70 @@ async function waitForFile(filePath, timeoutMs) {
   throw new Error(`Timed out waiting for file ${filePath}`);
 }
 
-async function waitForProcessExit(pid, timeoutMs) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (!(await isMatchingProcessStillRunning(pid))) {
-      return false;
-    }
-
-    await wait(250);
-  }
-
-  return true;
-}
-
-async function isMatchingProcessStillRunning(pid) {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-
-  const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+function getObsidianProcessRows() {
+  const result = spawnSync("ps", ["-axo", "pid=,ppid=,command="], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
 
   if (result.status !== 0) {
-    return false;
+    return [];
   }
 
-  const command = result.stdout.trim();
-  if (!command) {
-    return false;
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.*)$/u);
+      if (!match) {
+        return null;
+      }
+
+      return {
+        pid: Number(match[1]),
+        ppid: Number(match[2]),
+        command: match[3],
+      };
+    })
+    .filter((row) => row && (row.command.includes("/Obsidian") || row.command.includes("Obsidian Helper")));
+}
+
+function getTrackedProcessIds(rootPid) {
+  const rows = getObsidianProcessRows();
+  const tracked = new Set([Number(rootPid)]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (tracked.has(row.ppid) && !tracked.has(row.pid)) {
+        tracked.add(row.pid);
+        changed = true;
+      }
+    }
   }
 
-  return command.includes("/Obsidian") || command.includes("Obsidian Helper");
+  return tracked;
+}
+
+function getStillRunningTrackedRows(trackedPids) {
+  const rows = getObsidianProcessRows();
+  return rows.filter((row) => trackedPids.has(row.pid));
+}
+
+async function waitForTrackedProcessesExit(trackedPids, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const remainingRows = getStillRunningTrackedRows(trackedPids);
+    if (remainingRows.length === 0) {
+      return [];
+    }
+
+    await wait(250);
+  }
+
+  return getStillRunningTrackedRows(trackedPids);
 }
 
 async function terminatePid(pid) {
@@ -138,6 +167,7 @@ async function waitForChildExit(child, timeoutMs) {
 const metadataRaw = await waitForFile(metadataPath, 30000);
 const metadata = JSON.parse(metadataRaw);
 const noteAbsolutePath = path.join(metadata.vaultBasePath, metadata.notePath);
+const trackedPids = getTrackedProcessIds(metadata.appPid);
 
 async function getWorkspaceFileInfo(vaultBasePath) {
   const obsidianConfigPath = path.join(vaultBasePath, ".obsidian");
@@ -185,8 +215,7 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
   await wait(250);
 }
 
-const appStillRunning = await waitForProcessExit(metadata.appPid, 15000);
-const rendererStillRunning = await waitForProcessExit(metadata.rendererPid, 5000);
+const remainingRows = await waitForTrackedProcessesExit(trackedPids, 5000);
 
 const failures = [];
 
@@ -218,15 +247,15 @@ if (!workspaceInfo) {
   }
 }
 
-if (appStillRunning) {
-  failures.push(`Obsidian app PID ${metadata.appPid} is still running after Cmd+Q`);
-}
-
-if (rendererStillRunning) {
-  failures.push(`Obsidian renderer PID ${metadata.rendererPid} is still running after Cmd+Q`);
+if (remainingRows.length > 0) {
+  const remainingSummary = remainingRows.map((row) => `${row.pid} (ppid ${row.ppid}): ${row.command}`).join("; ");
+  failures.push(`Obsidian processes still running after Cmd+Q: ${remainingSummary}`);
 }
 
 if (failures.length > 0) {
+  for (const row of remainingRows) {
+    await terminatePid(row.pid);
+  }
   await terminatePid(metadata.rendererPid);
   await terminatePid(metadata.appPid);
   try {
