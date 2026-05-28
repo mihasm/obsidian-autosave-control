@@ -99,11 +99,11 @@ BRAT installs the plugin from this repository's GitHub releases and can update i
 1. Download the latest release from GitHub:  
    https://github.com/mihasm/obsidian-autosave-control/releases
 
-   Please download **obsidian-autosave-control.zip**, not the source code.
+2. Create this folder in your vault if it does not exist:
+   `your-vault/.obsidian/plugins/autosave-control`
 
-2. Extract the `.zip` file. It should contain a main.js file and manifest.json file.
+3. Download `main.js` and `manifest.json` from the release and place them in that folder.
 
-3. Copy the contents into: `your-vault/.obsidian/plugins/autosave-control`.
 4. In Obsidian:
 - Open **Settings → Community Plugins**
 - Enable the plugin

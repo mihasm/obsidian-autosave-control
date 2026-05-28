@@ -19,7 +19,6 @@ jobs:
         run: |
           npm install
           npm run build # Replace with your actual build command
-          zip -r obsidian-autosave-control.zip main.js manifest.json
 
       - name: Create GitHub Release
         id: create_release
@@ -32,17 +31,6 @@ jobs:
           body: "Automatically created release for tag ${{ github.ref_name }}."
           draft: false
           prerelease: false
-
-      # Upload the zip file
-      - name: Upload Release Asset (Zip)
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./obsidian-autosave-control.zip  # Path to the .zip file
-          asset_name: obsidian-autosave-control.zip    # Name of the file in the release
-          asset_content_type: application/zip
 
       # Upload main.js
       - name: Upload Release Asset (main.js)
