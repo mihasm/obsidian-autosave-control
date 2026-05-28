@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import { App, FileSystemAdapter, MarkdownView, TextFileView, TFile } from "obsidian";
 import { dlog } from "../debug";
 
@@ -183,7 +181,7 @@ export class PendingSaveQueue {
 
     const fileSystemAdapter = this.app.vault.adapter;
     if (fileSystemAdapter instanceof FileSystemAdapter) {
-      fs.writeFileSync(path.join(fileSystemAdapter.getBasePath(), filePath), pendingSave.latestData, "utf8");
+      await fileSystemAdapter.write(filePath, pendingSave.latestData);
       dlog("Pending save flushed via filesystem", filePath);
       await this.onFlushComplete?.(filePath);
       return;
