@@ -6,7 +6,6 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"wdio": "node ./scripts/run-wdio.mjs",
 		"wdio:desktop": "node ./scripts/run-wdio.mjs --desktop-only",
 		"wdio:android": "node ./scripts/run-android-wdio.mjs",
