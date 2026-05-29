@@ -3,7 +3,12 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 
 const SPEC_DIR = path.resolve("test", "specs");
-const SPECIAL_DESKTOP_SPECS = new Set(["quit-clean.e2e.ts", "quit-save.e2e.ts"]);
+const SPECIAL_DESKTOP_SPECS = new Set([
+  "quit-clean.e2e.ts",
+  "quit-save.e2e.ts",
+  "reload-no-save-discard.e2e.ts",
+  "reload-no-save-reopen.e2e.ts",
+]);
 const ANDROID_SPEC = "android.e2e.ts";
 const desktopOnly = process.argv.includes("--desktop-only");
 
@@ -46,6 +51,8 @@ for (const spec of await getDesktopSpecs()) {
 runs.push(
   { label: "Desktop quit clean", command: "node", args: ["./scripts/verify-quit-clean.mjs"] },
   { label: "Desktop quit save", command: "node", args: ["./scripts/verify-quit-save.mjs"] },
+  { label: "Desktop reload without saving discards changes", command: "node", args: ["./scripts/verify-reload-no-save-discard.mjs"] },
+  { label: "Desktop reload without saving relaunches app", command: "node", args: ["./scripts/verify-reload-no-save-reopen.mjs"] },
 );
 
 if (!desktopOnly) {

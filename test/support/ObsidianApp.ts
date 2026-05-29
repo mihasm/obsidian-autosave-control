@@ -575,6 +575,81 @@ class ObsidianApp {
     await browser.executeObsidianCommand("editor:save-file");
   }
 
+  async runReloadWithoutSavingCommand() {
+    const commandQuery = "reload";
+
+    await browser.execute(async () => {
+      const app = (window as typeof window & { app: any }).app;
+      const commands = app?.commands?.commands ?? {};
+      const commandPaletteCommandId = (
+        ["command-palette:open", "app:open-command-palette"].find((commandId) => commandId in commands)
+        ?? Object.entries(commands).find(([, command]) => {
+          const commandWithHotkeys = command as { hotkeys?: Array<{ modifiers?: string[]; key?: string }> };
+          const hotkeys = Array.isArray(commandWithHotkeys.hotkeys)
+            ? commandWithHotkeys.hotkeys
+            : [];
+
+          return hotkeys.some((hotkey) => {
+            const modifiers = new Set(hotkey.modifiers ?? []);
+            return modifiers.has("Mod") && String(hotkey.key ?? "").toLowerCase() === "p";
+          });
+        })?.[0]
+      );
+
+      if (!commandPaletteCommandId) {
+        throw new Error("Command palette command was not found.");
+      }
+
+      app.commands.executeCommandById(commandPaletteCommandId);
+    });
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => {
+        const input = document.querySelector(".prompt-input, .modal input[type='text'], .modal input") as HTMLElement | null;
+        return Boolean(input);
+      });
+    }, {
+      timeout: 10000,
+      timeoutMsg: "Command palette input did not appear in time.",
+    });
+
+    const commandPaletteInput = await $(".prompt-input, .modal input[type='text'], .modal input");
+    await commandPaletteInput.waitForExist({ timeout: 10000 });
+    await commandPaletteInput.click();
+    await browser.keys(Array.from(commandQuery));
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => {
+        const items = Array.from(document.querySelectorAll(".suggestion-item"));
+        return items.length > 0;
+      });
+    }, {
+      timeout: 10000,
+      timeoutMsg: `Reload suggestions did not appear in the command palette in time.`,
+    });
+
+    const selectedReloadWithoutSavingCommand = await browser.execute(() => {
+      const items = Array.from(document.querySelectorAll(".suggestion-item"));
+      const matchingItem = items.find((item) => /without saving/i.test(item.textContent ?? "")) as HTMLElement | undefined;
+
+      if (!matchingItem) {
+        return null;
+      }
+
+      matchingItem.click();
+      return matchingItem.textContent?.trim() ?? null;
+    });
+
+    if (!selectedReloadWithoutSavingCommand) {
+      const visibleSuggestions = await browser.execute(() => {
+        return Array.from(document.querySelectorAll(".suggestion-item"))
+          .map((item) => item.textContent?.trim())
+          .filter((value): value is string => Boolean(value));
+      });
+      throw new Error(`Reload without saving command was not found in the command palette. Visible suggestions: ${visibleSuggestions.join(", ") || "<none>"}`);
+    }
+  }
+
   async runActiveViewSave() {
     await browser.execute(async () => {
       const app = (window as typeof window & { app: any }).app;

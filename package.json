@@ -12,6 +12,8 @@
 		"wdio:standard": "wdio run ./wdio.conf.mts --exclude ./test/specs/android.e2e.ts --exclude ./test/specs/quit-save.e2e.ts --exclude ./test/specs/quit-clean.e2e.ts",
 		"wdio:quit-clean": "node ./scripts/verify-quit-clean.mjs",
 		"wdio:quit-save": "node ./scripts/verify-quit-save.mjs",
+		"wdio:reload-no-save-discard": "node ./scripts/verify-reload-no-save-discard.mjs",
+		"wdio:reload-no-save-reopen": "node ./scripts/verify-reload-no-save-reopen.mjs",
 		"wdio:all": "node ./scripts/run-wdio.mjs"
 	},
 	"keywords": [
