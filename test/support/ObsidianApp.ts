@@ -576,7 +576,7 @@ class ObsidianApp {
   }
 
   async runReloadWithoutSavingCommand() {
-    const commandQuery = "reload";
+    const commandName = "Reload app without saving";
 
     await browser.execute(async () => {
       const app = (window as typeof window & { app: any }).app;
@@ -616,38 +616,19 @@ class ObsidianApp {
     const commandPaletteInput = await $(".prompt-input, .modal input[type='text'], .modal input");
     await commandPaletteInput.waitForExist({ timeout: 10000 });
     await commandPaletteInput.click();
-    await browser.keys(Array.from(commandQuery));
+    await browser.keys(Array.from(commandName));
 
     await browser.waitUntil(async () => {
-      return browser.execute(() => {
+      return browser.execute((expectedCommandName: string) => {
         const items = Array.from(document.querySelectorAll(".suggestion-item"));
-        return items.length > 0;
-      });
+        return items.some((item) => item.textContent?.trim() === expectedCommandName);
+      }, commandName);
     }, {
       timeout: 10000,
-      timeoutMsg: `Reload suggestions did not appear in the command palette in time.`,
+      timeoutMsg: `Command '${commandName}' did not appear in the command palette in time.`,
     });
 
-    const selectedReloadWithoutSavingCommand = await browser.execute(() => {
-      const items = Array.from(document.querySelectorAll(".suggestion-item"));
-      const matchingItem = items.find((item) => /without saving/i.test(item.textContent ?? "")) as HTMLElement | undefined;
-
-      if (!matchingItem) {
-        return null;
-      }
-
-      matchingItem.click();
-      return matchingItem.textContent?.trim() ?? null;
-    });
-
-    if (!selectedReloadWithoutSavingCommand) {
-      const visibleSuggestions = await browser.execute(() => {
-        return Array.from(document.querySelectorAll(".suggestion-item"))
-          .map((item) => item.textContent?.trim())
-          .filter((value): value is string => Boolean(value));
-      });
-      throw new Error(`Reload without saving command was not found in the command palette. Visible suggestions: ${visibleSuggestions.join(", ") || "<none>"}`);
-    }
+    await browser.keys(["Enter"]);
   }
 
   async runActiveViewSave() {

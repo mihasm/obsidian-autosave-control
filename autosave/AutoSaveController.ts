@@ -12,7 +12,12 @@ type OnUnloadFileFn = (this: TextFileView, file: TFile) => Promise<void>;
 type SetViewStateFn = (this: WorkspaceLeaf, ...args: unknown[]) => Promise<unknown>;
 type DetachFn = (this: WorkspaceLeaf) => void;
 type DeleteFileFn = (this: unknown, ...args: unknown[]) => Promise<unknown> | unknown;
+type CommandCallback = (...args: unknown[]) => unknown;
 type SaveCommandCheckCallback = (checking: boolean) => boolean | void;
+type CommandDefinition = {
+  name?: string;
+  callback?: CommandCallback;
+};
 type WrappedFunction<T extends Function> = T & { __ascOriginal?: T; __ascOwner?: AutoSaveController };
 const MANUAL_SAVE_REQUEST_TTL_MS = 5000;
 
@@ -29,6 +34,7 @@ export class AutoSaveController {
   private originalVaultDelete: DeleteFileFn | null = null;
   private originalFileManagerTrashFile: DeleteFileFn | null = null;
   private originalSaveCommandCheckCallback: SaveCommandCheckCallback | null = null;
+  private originalReloadWithoutSavingCommandCallback: CommandCallback | null = null;
   private installedSaveWrapper: SaveFn | null = null;
   private installedRequestSaveWrapper: RequestSaveFn | null = null;
   private installedOpenFileWrapper: OpenFileFn | null = null;
@@ -39,6 +45,7 @@ export class AutoSaveController {
   private installedVaultDeleteWrapper: DeleteFileFn | null = null;
   private installedFileManagerTrashFileWrapper: DeleteFileFn | null = null;
   private installedSaveCommandCheckCallback: SaveCommandCheckCallback | null = null;
+  private installedReloadWithoutSavingCommandCallback: CommandCallback | null = null;
   private isUnloading = false;
   private workspaceLeafChangeEventRef?: EventRef;
   private workspaceQuitEventRef?: EventRef;
@@ -171,6 +178,7 @@ export class AutoSaveController {
     }
 
     this.wrapSaveCommand();
+    this.wrapReloadWithoutSavingCommand();
     this.workspaceLayoutSaveController.enable();
 
     this.isUnloading = false;
@@ -303,6 +311,7 @@ export class AutoSaveController {
     this.installedFileManagerTrashFileWrapper = null;
 
     this.restoreSaveCommand();
+    this.restoreReloadWithoutSavingCommand();
     this.workspaceLayoutSaveController.disable();
 
     if (this.workspaceLeafChangeEventRef) {
@@ -1033,6 +1042,24 @@ export class AutoSaveController {
     saveCommandDefinition.checkCallback = this.installedSaveCommandCheckCallback;
   }
 
+  private wrapReloadWithoutSavingCommand(): void {
+    const controller = this;
+    const reloadWithoutSavingCommandDefinition = this.getReloadWithoutSavingCommandDefinition();
+    if (!reloadWithoutSavingCommandDefinition || typeof reloadWithoutSavingCommandDefinition.callback !== "function") {
+      return;
+    }
+
+    const callback = this.unwrapWrappedFunction(reloadWithoutSavingCommandDefinition.callback);
+    this.originalReloadWithoutSavingCommandCallback = callback;
+    const wrappedCallback = function (this: unknown, ...args: unknown[]) {
+      controller.prepareForReloadWithoutSaving();
+      return callback.apply(this, args);
+    };
+
+    this.installedReloadWithoutSavingCommandCallback = this.markWrappedFunction(wrappedCallback, callback);
+    reloadWithoutSavingCommandDefinition.callback = this.installedReloadWithoutSavingCommandCallback;
+  }
+
   private restoreSaveCommand(): void {
     const saveCommandDefinition = this.getSaveCommandDefinition();
     if (!saveCommandDefinition || !this.originalSaveCommandCheckCallback) {
@@ -1049,6 +1076,19 @@ export class AutoSaveController {
     this.installedSaveCommandCheckCallback = null;
   }
 
+  private restoreReloadWithoutSavingCommand(): void {
+    const reloadWithoutSavingCommandDefinition = this.getReloadWithoutSavingCommandDefinition();
+    if (
+      reloadWithoutSavingCommandDefinition
+      && this.originalReloadWithoutSavingCommandCallback
+      && reloadWithoutSavingCommandDefinition.callback === this.installedReloadWithoutSavingCommandCallback
+    ) {
+      reloadWithoutSavingCommandDefinition.callback = this.originalReloadWithoutSavingCommandCallback;
+    }
+
+    this.originalReloadWithoutSavingCommandCallback = null;
+    this.installedReloadWithoutSavingCommandCallback = null;
+  }
 
   private markActiveFileManualSaveRequested(): void {
     const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1066,6 +1106,38 @@ export class AutoSaveController {
     };
 
     return appWithInternals.commands?.commands?.["editor:save-file"] ?? null;
+  }
+
+  private getReloadWithoutSavingCommandDefinition(): CommandDefinition | null {
+    const appWithInternals = this.app as App & {
+      commands?: { commands?: Record<string, CommandDefinition> };
+    };
+
+    const commands = appWithInternals.commands?.commands;
+    if (!commands) {
+      return null;
+    }
+
+    return commands["app:reload"]
+      ?? Object.values(commands).find((command) => command.name === "Reload app without saving")
+      ?? null;
+  }
+
+  private prepareForReloadWithoutSaving(): void {
+    this.restorePendingDataForReloadWithoutSaving();
+    this.pendingSaveQueue.clearAll();
+    this.disable();
+  }
+
+  private restorePendingDataForReloadWithoutSaving(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const filePath = this.getLeafMarkdownFilePath(leaf);
+      if (!filePath || !this.pendingSaveQueue.has(filePath)) {
+        continue;
+      }
+
+      this.restoreSavedDataIntoLeaf(leaf, filePath);
+    }
   }
 
   private getSaveHotkeys(): Hotkey[] {
