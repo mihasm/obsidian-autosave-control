@@ -1,4 +1,4 @@
-import { App, EditorPosition, EventRef, Hotkey, MarkdownView, Platform, Tasks, TextFileView, TFile, WorkspaceLeaf } from "obsidian";
+import { App, EditorPosition, EventRef, FileSystemAdapter, Hotkey, MarkdownView, Platform, Tasks, TextFileView, TFile, WorkspaceLeaf } from "obsidian";
 import { dlog } from "../debug";
 import type { AutoSaveControlSettings } from "../settings/AutoSaveSettings";
 import { EditActivityTracker } from "./EditActivityTracker";
@@ -20,8 +20,17 @@ type CommandDefinition = {
 };
 type WrappedFunction<T extends Function> = T & { __ascOriginal?: T; __ascOwner?: AutoSaveController };
 const MANUAL_SAVE_REQUEST_TTL_MS = 5000;
+const QUIT_SHORTCUT_INTENT_TTL_MS = 2000;
 
 type BeforeUnloadListener = (event: BeforeUnloadEvent) => void;
+type ElectronCloseEvent = { preventDefault: () => void };
+type ElectronCloseListener = (event: ElectronCloseEvent) => void;
+type ElectronBrowserWindow = {
+  on: (event: "close", listener: ElectronCloseListener) => void;
+  removeListener: (event: "close", listener: ElectronCloseListener) => void;
+  close?: () => void;
+  destroy?: () => void;
+};
 
 export class AutoSaveController {
   private originalSave: SaveFn | null = null;
@@ -57,6 +66,10 @@ export class AutoSaveController {
   private readonly workspaceLayoutSaveController: WorkspaceLayoutSaveController;
   private readonly beforeUnloadListenersByWindow = new Map<Window, BeforeUnloadListener>();
   private readonly quitShortcutListenersByWindow = new Map<Window, (event: KeyboardEvent) => void>();
+  private readonly electronCloseListenersByWindow = new Map<
+    Window,
+    { browserWindow: ElectronBrowserWindow; listener: ElectronCloseListener }
+  >();
   private readonly fileSwitchingLeaves = new WeakSet<WorkspaceLeaf>();
   private readonly pendingRestoreCountsByPath = new Map<string, number>();
   private readonly manualSaveRequestTimeoutsByPath = new Map<string, number>();
@@ -64,6 +77,9 @@ export class AutoSaveController {
   private readonly lastSavedDataByPath = new Map<string, string>();
   private readonly cursorPositionByPath = new Map<string, EditorPosition>();
   private readonly confirmedDeletionPaths = new Set<string>();
+  private quitShortcutIntentTimestampMs = 0;
+  private isHandlingWindowCloseRequest = false;
+  private bypassNextWindowCloseInterception = false;
 
   constructor(private readonly app: App, private readonly getSettings: () => AutoSaveControlSettings) {
     this.editActivityTracker = new EditActivityTracker(
@@ -202,14 +218,20 @@ export class AutoSaveController {
     if (!Platform.isMobileApp) {
       this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
         this.pendingSaveQueue.refreshAllLatestData();
+        const quitWasRequestedWithShortcut = this.wasQuitShortcutIntentRecentlyMarked();
 
         tasks.add(async () => {
-          if (!this.getSettings().disableAutoSave && this.pendingSaveQueue.hasAny()) {
+          const hasPendingSaves = this.pendingSaveQueue.hasAny();
+          if (
+            hasPendingSaves
+            && (!quitWasRequestedWithShortcut || !this.getSettings().disableAutoSave)
+          ) {
             await this.pendingSaveQueue.flushAll();
           }
 
           await this.workspaceLayoutSaveController.flush();
           this.isUnloading = true;
+          this.clearQuitShortcutIntent();
           this.exitApplicationAfterFlush();
         });
       });
@@ -331,6 +353,7 @@ export class AutoSaveController {
 
     this.detachAllWindowObservers();
     this.clearManualSaveRequests();
+    this.clearQuitShortcutIntent();
     this.pendingSaveQueue.clearAll();
     this.isUnloading = false;
 
@@ -582,15 +605,16 @@ export class AutoSaveController {
     };
 
     const beforeUnloadWithPrompt = (event: BeforeUnloadEvent) => {
-      if (!this.getSettings().disableAutoSave) {
+      if (this.isUnloading) {
         return;
       }
 
       this.pendingSaveQueue.refreshAllLatestData();
 
-      if (this.pendingSaveQueue.hasAny()) {
+      if (!this.wasQuitShortcutIntentRecentlyMarked() && this.pendingSaveQueue.hasAny()) {
         event.preventDefault();
-        event.returnValue = "You have unsaved changes. Closing Obsidian now will discard them.";
+        event.returnValue = false;
+        void this.handleWindowCloseRequest();
         return;
       }
 
@@ -599,6 +623,30 @@ export class AutoSaveController {
 
     targetWindow.addEventListener("beforeunload", beforeUnloadWithPrompt, { capture: true });
     this.beforeUnloadListenersByWindow.set(targetWindow, beforeUnloadWithPrompt);
+
+    const electronBrowserWindow = this.getElectronBrowserWindow(targetWindow);
+    if (!electronBrowserWindow) {
+      return;
+    }
+
+    const electronCloseListener: ElectronCloseListener = (event) => {
+      if (this.isUnloading || this.bypassNextWindowCloseInterception) {
+        this.bypassNextWindowCloseInterception = false;
+        return;
+      }
+
+      this.pendingSaveQueue.refreshAllLatestData();
+      if (!this.wasQuitShortcutIntentRecentlyMarked() && this.pendingSaveQueue.hasAny()) {
+        event.preventDefault();
+        void this.handleWindowCloseRequest();
+      }
+    };
+
+    electronBrowserWindow.on("close", electronCloseListener);
+    this.electronCloseListenersByWindow.set(targetWindow, {
+      browserWindow: electronBrowserWindow,
+      listener: electronCloseListener,
+    });
   }
 
   private detachAllWindowObservers() {
@@ -612,8 +660,13 @@ export class AutoSaveController {
       targetWindow.removeEventListener("keydown", quitShortcutListener, true);
     }
 
+    for (const { browserWindow, listener } of this.electronCloseListenersByWindow.values()) {
+      browserWindow.removeListener("close", listener);
+    }
+
     this.beforeUnloadListenersByWindow.clear();
     this.quitShortcutListenersByWindow.clear();
+    this.electronCloseListenersByWindow.clear();
   }
 
   private getViewWindow(view: MarkdownView): Window | null {
@@ -843,7 +896,13 @@ export class AutoSaveController {
   }
 
   private handleQuitShortcut(targetWindow: Window, event: KeyboardEvent): void {
-    if (!this.getSettings().disableAutoSave || !this.pendingSaveQueue.hasAny() || !this.isQuitShortcut(event)) {
+    if (!this.isQuitShortcut(event)) {
+      return;
+    }
+
+    this.markQuitShortcutIntent();
+
+    if (!this.getSettings().disableAutoSave || !this.pendingSaveQueue.hasAny()) {
       return;
     }
 
@@ -855,6 +914,7 @@ export class AutoSaveController {
     if (!shouldDiscardUnsavedChanges) {
       event.preventDefault();
       event.stopPropagation();
+      this.clearQuitShortcutIntent();
       return;
     }
 
@@ -1003,21 +1063,108 @@ export class AutoSaveController {
     this.manualSaveRequestTimeoutsByPath.clear();
   }
 
-  private exitApplicationAfterFlush(): void {
+  private exitApplicationAfterFlush(): boolean {
     const globalState = window as typeof window & { require?: any };
     const electron = globalState.require?.("electron");
 
     try {
-      electron?.remote?.app?.exit?.(0);
-      return;
+      if (typeof electron?.remote?.app?.exit === "function") {
+        electron.remote.app.exit(0);
+        return true;
+      }
     } catch {
       // fall through to softer quit path
     }
 
     try {
-      electron?.remote?.app?.quit?.();
+      if (typeof electron?.remote?.app?.quit === "function") {
+        electron.remote.app.quit();
+        return true;
+      }
     } catch {
       // no supported explicit quit path available
+    }
+
+    const browserWindow = this.getElectronBrowserWindow(window);
+    try {
+      if (typeof browserWindow?.close === "function") {
+        browserWindow.close();
+        return true;
+      }
+    } catch {
+      // fall through to harder close path
+    }
+
+    try {
+      if (typeof browserWindow?.destroy === "function") {
+        browserWindow.destroy();
+        return true;
+      }
+    } catch {
+      // no supported explicit close path available
+    }
+
+    return false;
+  }
+
+  private getElectronBrowserWindow(targetWindow: Window): ElectronBrowserWindow | null {
+    const globalState = targetWindow as typeof window & { require?: any };
+    const electron = globalState.require?.("electron");
+    const browserWindow = electron?.remote?.getCurrentWindow?.();
+    if (!browserWindow || typeof browserWindow.on !== "function" || typeof browserWindow.removeListener !== "function") {
+      return null;
+    }
+
+    return browserWindow as ElectronBrowserWindow;
+  }
+
+  private async handleWindowCloseRequest(): Promise<void> {
+    if (this.isHandlingWindowCloseRequest) {
+      return;
+    }
+
+    this.isHandlingWindowCloseRequest = true;
+
+    try {
+      this.pendingSaveQueue.refreshAllLatestData();
+      await this.forceFlushOpenMarkdownLeaves();
+      if (this.pendingSaveQueue.hasAny()) {
+        await this.pendingSaveQueue.flushAll();
+      }
+
+      await this.workspaceLayoutSaveController.flush();
+      this.isUnloading = true;
+      this.clearQuitShortcutIntent();
+      this.bypassNextWindowCloseInterception = true;
+      if (!this.exitApplicationAfterFlush()) {
+        this.bypassNextWindowCloseInterception = false;
+        this.isUnloading = false;
+      }
+    } finally {
+      this.isHandlingWindowCloseRequest = false;
+    }
+  }
+
+  private async forceFlushOpenMarkdownLeaves(): Promise<void> {
+    const fileSystemAdapter = this.app.vault.adapter;
+
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (!(leaf.view instanceof MarkdownView) || !leaf.view.file) {
+        continue;
+      }
+
+      const filePath = leaf.view.file.path;
+      const textFileView = leaf.view as unknown as TextFileView;
+      const latestData = textFileView.getViewData();
+
+      if (fileSystemAdapter instanceof FileSystemAdapter) {
+        await fileSystemAdapter.write(filePath, latestData);
+      } else {
+        await this.app.vault.modify(leaf.view.file, latestData);
+      }
+
+      this.pendingSaveQueue.clear(filePath);
+      this.captureCurrentViewData(filePath, textFileView);
     }
   }
 
@@ -1198,5 +1345,21 @@ export class AutoSaveController {
       event.shiftKey === expectsShift &&
       event.altKey === expectsAlt
     );
+  }
+
+  private markQuitShortcutIntent(): void {
+    this.quitShortcutIntentTimestampMs = Date.now();
+  }
+
+  private clearQuitShortcutIntent(): void {
+    this.quitShortcutIntentTimestampMs = 0;
+  }
+
+  private wasQuitShortcutIntentRecentlyMarked(): boolean {
+    if (this.quitShortcutIntentTimestampMs === 0) {
+      return false;
+    }
+
+    return Date.now() - this.quitShortcutIntentTimestampMs <= QUIT_SHORTCUT_INTENT_TTL_MS;
   }
 }

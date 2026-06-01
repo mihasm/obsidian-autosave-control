@@ -1075,6 +1075,35 @@ class ObsidianApp {
     });
   }
 
+  async dispatchElectronWindowClose() {
+    return browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      const plugin = app?.plugins?.plugins?.["autosave-control"] as {
+        autosaveController?: {
+          electronCloseListenersByWindow?: Map<
+            Window,
+            { listener: (event: { preventDefault: () => void }) => void }
+          >;
+        };
+      } | undefined;
+      const closeObserver = plugin?.autosaveController?.electronCloseListenersByWindow?.get(window);
+      const closeListener = closeObserver?.listener;
+
+      if (!closeListener) {
+        throw new Error("Autosave Control electron close listener is not attached to the window.");
+      }
+
+      let defaultPrevented = false;
+      closeListener({
+        preventDefault: () => {
+          defaultPrevented = true;
+        },
+      });
+
+      return { defaultPrevented };
+    });
+  }
+
   async installConfirmStub(response: boolean) {
     await browser.execute((nextResponse: boolean) => {
       const targetWindow = window as typeof window & {

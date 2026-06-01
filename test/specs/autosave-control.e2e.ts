@@ -904,17 +904,54 @@ describe("Autosave Control manual scenarios", () => {
     await expect(layoutSaveMethods.requestSaveLayout === "function" || layoutSaveMethods.saveLayout === "function").toBe(true);
   });
 
-  it("shows a confirmation prompt when closing Obsidian with pending changes in manual-only mode", async () => {
+  it("flushes pending note changes when closing Obsidian without the quit shortcut in manual-only mode", async () => {
     const notePath = "settings/quit-prompt.md";
 
     await enableManualOnlyMode();
     await ObsidianApp.createAndOpenNote(notePath);
     await ObsidianApp.typeText("unsaved");
     await ObsidianApp.waitForPendingStatus();
+    await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      const plugin = app?.plugins?.plugins?.["autosave-control"] as {
+        autosaveController?: { exitApplicationAfterFlush?: () => void };
+      } | undefined;
+      const controller = plugin?.autosaveController as {
+        exitApplicationAfterFlush?: () => void;
+      } | undefined;
+      const targetWindow = window as typeof window & {
+        __ascOriginalExitApplicationAfterFlush?: () => void;
+      };
+      if (!controller?.exitApplicationAfterFlush) {
+        throw new Error("Autosave Control exit handler is not available.");
+      }
 
-    const beforeUnload = await ObsidianApp.dispatchBeforeUnload();
-    await expect(beforeUnload.defaultPrevented).toBe(true);
-    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
+      targetWindow.__ascOriginalExitApplicationAfterFlush = controller.exitApplicationAfterFlush;
+      controller.exitApplicationAfterFlush = () => {};
+    });
+
+    try {
+      const windowClose = await ObsidianApp.dispatchElectronWindowClose();
+      await expect(windowClose.defaultPrevented).toBe(true);
+      await expectSavedAfterDelay(notePath, "unsaved", 4000);
+    } finally {
+      await browser.execute(() => {
+        const app = (window as typeof window & { app: any }).app;
+        const plugin = app?.plugins?.plugins?.["autosave-control"] as {
+          autosaveController?: { exitApplicationAfterFlush?: () => void };
+        } | undefined;
+        const controller = plugin?.autosaveController as {
+          exitApplicationAfterFlush?: () => void;
+        } | undefined;
+        const targetWindow = window as typeof window & {
+          __ascOriginalExitApplicationAfterFlush?: () => void;
+        };
+        if (controller && targetWindow.__ascOriginalExitApplicationAfterFlush) {
+          controller.exitApplicationAfterFlush = targetWindow.__ascOriginalExitApplicationAfterFlush;
+        }
+        delete targetWindow.__ascOriginalExitApplicationAfterFlush;
+      });
+    }
   });
 
   it("cancels the close prompt in manual-only mode and keeps Obsidian open without saving", async () => {
