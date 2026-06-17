@@ -9,6 +9,7 @@
 		"wdio": "node ./scripts/run-wdio.mjs",
 		"wdio:desktop": "node ./scripts/run-wdio.mjs --desktop-only",
 		"wdio:android": "node ./scripts/run-android-wdio.mjs",
+		"wdio:issue34": "wdio run ./wdio.issue34.conf.mts",
 		"wdio:standard": "wdio run ./wdio.conf.mts --exclude ./test/specs/android.e2e.ts --exclude ./test/specs/quit-save.e2e.ts --exclude ./test/specs/quit-clean.e2e.ts",
 		"wdio:quit-clean": "node ./scripts/verify-quit-clean.mjs",
 		"wdio:quit-save": "node ./scripts/verify-quit-save.mjs",

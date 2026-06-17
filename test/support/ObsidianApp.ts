@@ -24,6 +24,12 @@ class ObsidianApp {
     await this.waitForPluginReady();
   }
 
+  async reloadWithFreshVaultWithoutPlugin() {
+    await browser.reloadObsidian({ vault: SIMPLE_VAULT_PATH });
+    await this.closeModalIfPresent();
+    await this.waitForWorkspaceReady();
+  }
+
   async enablePlugin() {
     await browser.execute(async (pluginId: string) => {
       const app = (window as typeof window & { app: any }).app;
@@ -65,6 +71,189 @@ class ObsidianApp {
     await fs.rm(path.join(vaultBasePath, ".obsidian", "plugins", PLUGIN_ID, "data.json"), { force: true });
   }
 
+  async openCommunityPluginsTab() {
+    await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      app.setting.open();
+      app.setting.openTabById("community-plugins");
+    });
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => {
+        const labels = Array.from(document.querySelectorAll(".vertical-tab-header-title, .setting-item-name, h2, h3"));
+        return labels.some((label) => label.textContent?.trim() === "Community plugins");
+      });
+    }, {
+      timeout: 10000,
+      timeoutMsg: "Community plugins tab did not render in time.",
+    });
+  }
+
+  async installCommunityPluginViaUi(pluginName: string) {
+    await this.openCommunityPluginsTab();
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => {
+        const buttons = Array.from(document.querySelectorAll(".setting-item button"));
+        return buttons.some((button) => button.textContent?.trim() === "Browse");
+      });
+    }, {
+      timeout: 10000,
+      timeoutMsg: "Community plugins browse button did not appear in time.",
+    });
+
+    await browser.execute(() => {
+      const buttons = Array.from(document.querySelectorAll(".setting-item button")) as HTMLButtonElement[];
+      const trustButton = buttons.find((button) => button.textContent?.trim() === "Turn on community plugins");
+      trustButton?.click();
+    });
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => {
+        const buttons = Array.from(document.querySelectorAll(".setting-item button"));
+        return buttons.some((button) => button.textContent?.trim() === "Browse");
+      });
+    }, {
+      timeout: 10000,
+      timeoutMsg: "Community plugins did not unlock after turning them on.",
+    });
+
+    await browser.execute(() => {
+      const buttons = Array.from(document.querySelectorAll(".setting-item button")) as HTMLButtonElement[];
+      const browseButton = buttons.find((button) => button.textContent?.trim() === "Browse");
+      if (!browseButton) {
+        throw new Error("Community plugins browse button was not found.");
+      }
+      browseButton.click();
+    });
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => Boolean(document.querySelector(".mod-community-modal")));
+    }, {
+      timeout: 10000,
+      timeoutMsg: "Community plugins browser modal did not open in time.",
+    });
+
+    await browser.execute((targetPluginName: string) => {
+      const input = document.querySelector(".mod-community-modal .community-modal-controls input") as HTMLInputElement | null;
+      if (!input) {
+        throw new Error("Community plugins browser search input was not found.");
+      }
+
+      input.focus();
+      input.value = targetPluginName;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, pluginName);
+
+    await browser.waitUntil(async () => {
+      return browser.execute((targetPluginName: string) => {
+        const normalizedTarget = targetPluginName.trim().toLowerCase();
+        const names = Array.from(document.querySelectorAll(".mod-community-modal .community-item-name"));
+        return names.some((name) => name.textContent?.trim().toLowerCase() === normalizedTarget);
+      }, pluginName);
+    }, {
+      timeout: 10000,
+      timeoutMsg: `Community plugin '${pluginName}' did not appear in browser results.`,
+    });
+
+    await browser.execute((targetPluginName: string) => {
+      const normalizedTarget = targetPluginName.trim().toLowerCase();
+      const items = Array.from(document.querySelectorAll(".mod-community-modal .community-item")) as HTMLElement[];
+      const item = items.find((candidate) => {
+        const name = candidate.querySelector(".community-item-name")?.textContent?.trim().toLowerCase();
+        return name === normalizedTarget;
+      });
+
+      if (!item) {
+        throw new Error(`Community plugin '${targetPluginName}' result item was not found.`);
+      }
+
+      item.click();
+    }, pluginName);
+
+    await browser.waitUntil(async () => {
+      return browser.execute((targetPluginName: string) => {
+        const detailsName = document.querySelector(".mod-community-modal .community-modal-info-name");
+        const detailsText = detailsName?.textContent?.trim() ?? "";
+        return detailsText.startsWith(targetPluginName);
+      }, pluginName);
+    }, {
+      timeout: 10000,
+      timeoutMsg: `Community plugin '${pluginName}' details pane did not open in time.`,
+    });
+
+    await browser.execute(() => {
+      const buttons = Array.from(
+        document.querySelectorAll(".mod-community-modal .community-modal-button-container button")
+      ) as HTMLButtonElement[];
+      const installButton = buttons.find((button) => button.textContent?.trim() === "Install");
+
+      if (!installButton) {
+        throw new Error("Community plugin install button was not found.");
+      }
+
+      installButton.click();
+    });
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => {
+        const buttons = Array.from(
+          document.querySelectorAll(".mod-community-modal .community-modal-button-container button")
+        );
+        return buttons.some((button) => button.textContent?.trim() === "Enable");
+      });
+    }, {
+      timeout: 20000,
+      timeoutMsg: "Community plugin install did not complete with an Enable button.",
+    });
+  }
+
+  async clickCommunityPluginEnableButton(pluginName: string) {
+    await browser.waitUntil(async () => {
+      return browser.execute((targetPluginName: string) => {
+        const detailsName = document.querySelector(".mod-community-modal .community-modal-info-name");
+        const detailsText = detailsName?.textContent?.trim() ?? "";
+        if (!detailsText.startsWith(targetPluginName)) {
+          return false;
+        }
+
+        const buttons = Array.from(
+          document.querySelectorAll(".mod-community-modal .community-modal-button-container button")
+        );
+        return buttons.some((button) => button.textContent?.trim() === "Enable");
+      }, pluginName);
+    }, {
+      timeout: 10000,
+      timeoutMsg: `Enable button for community plugin '${pluginName}' did not appear in time.`,
+    });
+
+    await browser.execute((targetPluginName: string) => {
+      const detailsName = document.querySelector(".mod-community-modal .community-modal-info-name");
+      const detailsText = detailsName?.textContent?.trim() ?? "";
+      if (!detailsText.startsWith(targetPluginName)) {
+        throw new Error(`Community plugin '${targetPluginName}' is not selected in the browser modal.`);
+      }
+
+      const enableButton = Array.from(
+        document.querySelectorAll(".mod-community-modal .community-modal-button-container button")
+      )
+        .find((button) => button.textContent?.trim() === "Enable") as HTMLButtonElement | undefined;
+
+      if (!enableButton) {
+        throw new Error(`Enable button for community plugin '${targetPluginName}' was not found.`);
+      }
+
+      enableButton.click();
+    }, pluginName);
+  }
+
+  async isPluginLoaded() {
+    return browser.execute((pluginId: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      return Boolean(app?.plugins?.plugins?.[pluginId]);
+    }, PLUGIN_ID);
+  }
+
   async waitForPluginReady() {
     await browser.waitUntil(async () => {
       return browser.execute((pluginId: string) => {
@@ -78,10 +267,46 @@ class ObsidianApp {
   }
 
   async closeModalIfPresent() {
-    const closeButton = await $(".modal .modal-close-button");
-    if (await closeButton.isExisting()) {
-      await closeButton.click();
-    }
+    await browser.execute(() => {
+      const closeButton = document.querySelector(".modal .modal-close-button") as HTMLElement | null;
+      closeButton?.click();
+    });
+  }
+
+  async closeSettingsIfOpen() {
+    await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      app.setting?.close?.();
+    });
+  }
+
+  async returnToEditor(notePath: string) {
+    await browser.keys(["Escape"]);
+    await browser.pause(200);
+    await browser.keys(["Escape"]);
+    await browser.pause(200);
+
+    await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      app.setting?.close?.();
+    });
+
+    await browser.waitUntil(async () => {
+      return browser.execute(() => {
+        const communityModalOpen = Boolean(document.querySelector(".mod-community-modal"));
+        const settingsModalOpen = Boolean(document.querySelector(".modal.mod-settings"));
+        const genericModalOpen = Boolean(document.querySelector(".modal-container .modal:not(.mod-settings)"));
+        const settingsPaneVisible = Array.from(document.querySelectorAll(".vertical-tab-content-container"))
+          .some((element) => (element as HTMLElement).offsetParent !== null);
+        return !communityModalOpen && !settingsModalOpen && !genericModalOpen && !settingsPaneVisible;
+      });
+    }, {
+      timeout: 10000,
+      timeoutMsg: "Community plugins UI did not close in time.",
+    });
+
+    await this.openExistingNote(notePath);
+    await this.focusEditor();
   }
 
   async waitForWorkspaceReady() {
