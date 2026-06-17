@@ -77,6 +77,7 @@ export class AutoSaveController {
   private readonly lastSavedDataByPath = new Map<string, string>();
   private readonly cursorPositionByPath = new Map<string, EditorPosition>();
   private readonly confirmedDeletionPaths = new Set<string>();
+  private readonly liveRequestSaveOverrides = new Map<TextFileView, { original: RequestSaveFn; installed: RequestSaveFn }>();
   private quitShortcutIntentTimestampMs = 0;
   private isHandlingWindowCloseRequest = false;
   private bypassNextWindowCloseInterception = false;
@@ -213,6 +214,7 @@ export class AutoSaveController {
       }
 
       this.attachWindowObservers(this.getViewWindow(leaf.view));
+      this.scheduleLiveRequestSaveWrap(leaf.view as unknown as TextFileView);
     });
 
     if (!Platform.isMobileApp) {
@@ -242,6 +244,7 @@ export class AutoSaveController {
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof MarkdownView) {
         this.attachWindowObservers(this.getViewWindow(leaf.view));
+        this.scheduleLiveRequestSaveWrap(leaf.view as unknown as TextFileView);
         void this.captureLeafSavedData(leaf);
       }
     }
@@ -352,6 +355,7 @@ export class AutoSaveController {
     }
 
     this.detachAllWindowObservers();
+    this.restoreLiveRequestSaveOverrides();
     this.clearManualSaveRequests();
     this.clearQuitShortcutIntent();
     this.pendingSaveQueue.clearAll();
@@ -478,6 +482,7 @@ export class AutoSaveController {
       try {
         return await originalOpenFile.apply(this, args);
       } finally {
+        controller.scheduleLiveRequestSaveWrap(this.view as unknown as TextFileView);
         void controller.captureLeafSavedData(this);
         controller.schedulePendingDataRestoreInLeaf(this);
         controller.scheduleLeafCursorRestore(this, shouldRestoreCursor);
@@ -504,6 +509,7 @@ export class AutoSaveController {
       try {
         return await originalSetViewState.apply(this, args);
       } finally {
+        controller.scheduleLiveRequestSaveWrap(this.view as unknown as TextFileView);
         void controller.captureLeafSavedData(this);
         controller.schedulePendingDataRestoreInLeaf(this);
         controller.scheduleLeafCursorRestore(this, shouldRestoreCursor);
@@ -581,6 +587,53 @@ export class AutoSaveController {
     wrappedFunction.__ascOriginal = original;
     wrappedFunction.__ascOwner = this;
     return wrapper;
+  }
+
+  private wrapLiveRequestSave(view: TextFileView): void {
+    const requestSaveDescriptor = Object.getOwnPropertyDescriptor(view, "requestSave");
+    if (!requestSaveDescriptor || typeof requestSaveDescriptor.value !== "function") {
+      return;
+    }
+
+    const existingOverride = this.liveRequestSaveOverrides.get(view);
+    if (existingOverride && requestSaveDescriptor.value === existingOverride.installed) {
+      return;
+    }
+
+    const originalRequestSave = this.unwrapWrappedFunction(requestSaveDescriptor.value as RequestSaveFn);
+    const installedRequestSave = this.createRequestSaveWrapper(originalRequestSave);
+    Object.defineProperty(view, "requestSave", {
+      ...requestSaveDescriptor,
+      value: installedRequestSave,
+    });
+    this.liveRequestSaveOverrides.set(view, {
+      original: requestSaveDescriptor.value as RequestSaveFn,
+      installed: installedRequestSave,
+    });
+  }
+
+  private scheduleLiveRequestSaveWrap(view: TextFileView): void {
+    this.wrapLiveRequestSave(view);
+
+    window.setTimeout(() => {
+      this.wrapLiveRequestSave(view);
+    }, 0);
+  }
+
+  private restoreLiveRequestSaveOverrides(): void {
+    for (const [view, override] of this.liveRequestSaveOverrides.entries()) {
+      const requestSaveDescriptor = Object.getOwnPropertyDescriptor(view, "requestSave");
+      if (!requestSaveDescriptor || requestSaveDescriptor.value !== override.installed) {
+        continue;
+      }
+
+      Object.defineProperty(view, "requestSave", {
+        ...requestSaveDescriptor,
+        value: override.original,
+      });
+    }
+
+    this.liveRequestSaveOverrides.clear();
   }
 
   private unwrapWrappedFunction<T extends Function>(fn: T): T {

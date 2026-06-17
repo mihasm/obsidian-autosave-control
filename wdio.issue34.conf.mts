@@ -12,6 +12,7 @@ export const config = {
       browserVersion: "latest",
       "wdio:obsidianOptions": {
         installerVersion: "latest",
+        plugins: ["."],
         vault: "test/vaults/simple",
       },
     },
