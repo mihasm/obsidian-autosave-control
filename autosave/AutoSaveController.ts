@@ -55,7 +55,8 @@ function callWithArgs<TThis, TArgs extends unknown[], TResult>(
   thisArg: TThis,
   ...args: TArgs
 ): TResult {
-  return fn.call(thisArg, ...args);
+  const boundFn: (...boundArgs: TArgs) => TResult = fn.bind(thisArg);
+  return boundFn(...args);
 }
 
 function hasRequestSave(value: unknown): value is TextFileView {

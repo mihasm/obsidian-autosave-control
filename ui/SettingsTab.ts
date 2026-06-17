@@ -29,7 +29,7 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName("Autosave Control")
+      .setName("Behavior")
       .setHeading();
 
     new Setting(containerEl)
