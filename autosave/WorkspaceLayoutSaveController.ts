@@ -10,6 +10,20 @@ type PendingWorkspaceWrite = {
   options?: unknown;
 };
 
+function callAdapterWrite(
+  fn: AdapterWriteFn,
+  thisArg: unknown,
+  normalizedPath: string,
+  data: string,
+  options?: unknown,
+): Promise<void> {
+  return Reflect.apply(
+    fn as (this: unknown, normalizedPath: string, data: string, options?: unknown) => Promise<void>,
+    thisArg,
+    [normalizedPath, data, options],
+  ) as Promise<void>;
+}
+
 export class WorkspaceLayoutSaveController {
   private originalAdapterWrite: AdapterWriteFn | null = null;
   private installedAdapterWriteWrapper: AdapterWriteFn | null = null;
@@ -105,7 +119,8 @@ export class WorkspaceLayoutSaveController {
 
     this.allowImmediateWrite = true;
     try {
-      await this.originalAdapterWrite.call(
+      await callAdapterWrite(
+        this.originalAdapterWrite,
         this.app.vault.adapter,
         pendingWrite.normalizedPath,
         pendingWrite.data,
@@ -119,8 +134,8 @@ export class WorkspaceLayoutSaveController {
 
   private createAdapterWriteWrapper(originalAdapterWrite: AdapterWriteFn): AdapterWriteFn {
     const isEnabled = this.isEnabled;
-    const isWorkspaceLayoutPath = this.isWorkspaceLayoutPath.bind(this);
-    const schedule = this.schedule.bind(this);
+    const isWorkspaceLayoutPath = (normalizedPath: string) => this.isWorkspaceLayoutPath(normalizedPath);
+    const schedule = () => this.schedule();
     const allowImmediateWrite = () => this.allowImmediateWrite;
     const setPendingWrite = (pendingWrite: PendingWorkspaceWrite) => {
       this.pendingWrite = pendingWrite;
@@ -137,7 +152,7 @@ export class WorkspaceLayoutSaveController {
         !isEnabled() ||
         !isWorkspaceLayoutPath(normalizedPath)
       ) {
-        await originalAdapterWrite.call(this, normalizedPath, data, options);
+        await callAdapterWrite(originalAdapterWrite, this, normalizedPath, data, options);
         return;
       }
 

@@ -19,6 +19,12 @@ type CommandDefinition = {
   callback?: CommandCallback;
 };
 type WrappedFunctionMetadata<T> = { __ascOriginal?: T; __ascOwner?: AutoSaveController };
+type FileManagerWithTrashFile = {
+  trashFile?: DeleteFileFn;
+};
+type WindowWithConfirm = Window & {
+  confirm: (message?: string) => boolean;
+};
 const MANUAL_SAVE_REQUEST_TTL_MS = 5000;
 const QUIT_SHORTCUT_INTENT_TTL_MS = 2000;
 
@@ -49,7 +55,17 @@ function callWithArgs<TThis, TArgs extends unknown[], TResult>(
   thisArg: TThis,
   ...args: TArgs
 ): TResult {
-  return fn.call(thisArg, ...args);
+  return Reflect.apply(fn as (this: TThis, ...args: TArgs) => TResult, thisArg, args) as TResult;
+}
+
+function hasRequestSave(value: unknown): value is TextFileView {
+  return typeof value === "object"
+    && value !== null
+    && typeof (value as { requestSave?: unknown }).requestSave === "function";
+}
+
+function isWindowWithConfirm(targetWindow: Window | null): targetWindow is WindowWithConfirm {
+  return targetWindow !== null && typeof targetWindow.confirm === "function";
 }
 
 export class AutoSaveController {
@@ -159,9 +175,7 @@ export class AutoSaveController {
       trash?: DeleteFileFn;
       delete?: DeleteFileFn;
     };
-    const fileManagerWithTrashFile = (this.app as App & {
-      fileManager?: { trashFile?: DeleteFileFn };
-    }).fileManager;
+    const fileManagerWithTrashFile = this.getFileManagerWithTrashFile();
     const writableVaultWithDeleteMethods = vaultWithDeleteMethods as {
       trash?: DeleteFileFn;
       delete?: DeleteFileFn;
@@ -208,10 +222,10 @@ export class AutoSaveController {
       writableVaultWithDeleteMethods.delete = this.installedVaultDeleteWrapper;
     }
 
-    if (typeof fileManagerWithTrashFile?.trashFile === "function") {
+    if (writableFileManagerWithTrashFile && typeof fileManagerWithTrashFile?.trashFile === "function") {
       this.originalFileManagerTrashFile = this.unwrapWrappedFunction(fileManagerWithTrashFile.trashFile);
       this.installedFileManagerTrashFileWrapper = this.createDeleteWrapper(this.originalFileManagerTrashFile);
-      writableFileManagerWithTrashFile!.trashFile = this.installedFileManagerTrashFileWrapper;
+      writableFileManagerWithTrashFile.trashFile = this.installedFileManagerTrashFileWrapper;
     }
 
     this.wrapSaveCommand();
@@ -287,9 +301,7 @@ export class AutoSaveController {
       trash?: DeleteFileFn;
       delete?: DeleteFileFn;
     };
-    const fileManagerWithTrashFile = (this.app as App & {
-      fileManager?: { trashFile?: DeleteFileFn };
-    }).fileManager;
+    const fileManagerWithTrashFile = this.getFileManagerWithTrashFile();
     const writableVaultWithDeleteMethods = vaultWithDeleteMethods as {
       trash?: DeleteFileFn;
       delete?: DeleteFileFn;
@@ -349,8 +361,12 @@ export class AutoSaveController {
     this.originalVaultDelete = null;
     this.installedVaultDeleteWrapper = null;
 
-    if (this.originalFileManagerTrashFile && fileManagerWithTrashFile?.trashFile === this.installedFileManagerTrashFileWrapper) {
-      writableFileManagerWithTrashFile!.trashFile = this.originalFileManagerTrashFile;
+    if (
+      writableFileManagerWithTrashFile &&
+      this.originalFileManagerTrashFile &&
+      fileManagerWithTrashFile?.trashFile === this.installedFileManagerTrashFileWrapper
+    ) {
+      writableFileManagerWithTrashFile.trashFile = this.originalFileManagerTrashFile;
     }
     this.originalFileManagerTrashFile = null;
     this.installedFileManagerTrashFileWrapper = null;
@@ -385,9 +401,9 @@ export class AutoSaveController {
   }
 
   private createSaveWrapper(originalSave: SaveFn): SaveFn {
-    const consumeManualSaveRequest = this.consumeManualSaveRequest.bind(this);
-    const captureCurrentViewData = this.captureCurrentViewData.bind(this);
-    const shouldHoldSave = this.shouldHoldSave.bind(this);
+    const consumeManualSaveRequest = (filePath: string) => this.consumeManualSaveRequest(filePath);
+    const captureCurrentViewData = (filePath: string, view: TextFileView) => this.captureCurrentViewData(filePath, view);
+    const shouldHoldSave = (view: TextFileView, filePath: string) => this.shouldHoldSave(view, filePath);
     const { discardedViews, pendingSaveQueue, workspaceLayoutSaveController } = this;
 
     const wrappedSave = function wrappedSave(this: MarkdownView, ...args: unknown[]) {
@@ -396,7 +412,7 @@ export class AutoSaveController {
         return callWithArgs(originalSave, this, ...args);
       }
 
-      if (discardedViews.has(this as unknown as TextFileView)) {
+      if (discardedViews.has(this)) {
         dlog("Suppressing save for discarded file", { filePath, args });
         return;
       }
@@ -408,19 +424,19 @@ export class AutoSaveController {
         if (saveResult instanceof Promise) {
           return saveResult.then(() => {
             pendingSaveQueue.clear(filePath);
-            captureCurrentViewData(filePath, this as unknown as TextFileView);
+            captureCurrentViewData(filePath, this);
             return workspaceLayoutSaveController.flush();
           });
         }
 
         pendingSaveQueue.clear(filePath);
-        captureCurrentViewData(filePath, this as unknown as TextFileView);
+        captureCurrentViewData(filePath, this);
         void workspaceLayoutSaveController.flush();
         return saveResult;
       }
 
-      if (shouldHoldSave(this as unknown as TextFileView, filePath)) {
-        pendingSaveQueue.schedule(filePath, this as unknown as TextFileView);
+      if (shouldHoldSave(this, filePath)) {
+        pendingSaveQueue.schedule(filePath, this);
         dlog("Suppressing non-manual save", { filePath, args });
         return;
       }
@@ -432,7 +448,7 @@ export class AutoSaveController {
   }
 
   private createOnUnloadFileWrapper(originalOnUnloadFile: OnUnloadFileFn): OnUnloadFileFn {
-    const syncPendingDataForFile = this.syncPendingDataForFile.bind(this);
+    const syncPendingDataForFile = (filePath: string) => this.syncPendingDataForFile(filePath);
     const getSettings = this.getSettings;
     const { discardedViews, pendingSaveQueue, fileSwitchingLeaves } = this;
 
@@ -461,10 +477,10 @@ export class AutoSaveController {
   }
 
   private createRequestSaveWrapper(originalRequestSave: RequestSaveFn): RequestSaveFn {
-    const isRestoringPendingData = this.isRestoringPendingData.bind(this);
-    const hasManualSaveRequest = this.hasManualSaveRequest.bind(this);
-    const markManualSaveRequested = this.markManualSaveRequested.bind(this);
-    const shouldHoldSave = this.shouldHoldSave.bind(this);
+    const isRestoringPendingData = (filePath: string) => this.isRestoringPendingData(filePath);
+    const hasManualSaveRequest = (filePath: string) => this.hasManualSaveRequest(filePath);
+    const markManualSaveRequested = (filePath: string) => this.markManualSaveRequested(filePath);
+    const shouldHoldSave = (view: TextFileView, filePath: string) => this.shouldHoldSave(view, filePath);
     const { discardedViews, pendingSaveQueue } = this;
 
     const wrappedRequestSave = function wrappedRequestSave(this: TextFileView, ...args: unknown[]) {
@@ -501,15 +517,15 @@ export class AutoSaveController {
   }
 
   private createOpenFileWrapper(originalOpenFile: OpenFileFn): OpenFileFn {
-    const hasSubpathNavigationInOpenArgs = this.hasSubpathNavigationInOpenArgs.bind(this);
-    const syncLeafPendingData = this.syncLeafPendingData.bind(this);
-    const confirmLeafSwitchIfNeeded = this.confirmLeafSwitchIfNeeded.bind(this);
-    const getTargetFilePathFromOpenArgs = this.getTargetFilePathFromOpenArgs.bind(this);
-    const scheduleLiveRequestSaveWrap = this.scheduleLiveRequestSaveWrap.bind(this);
-    const captureLeafSavedData = this.captureLeafSavedData.bind(this);
-    const schedulePendingDataRestoreInLeaf = this.schedulePendingDataRestoreInLeaf.bind(this);
-    const scheduleLeafCursorRestore = this.scheduleLeafCursorRestore.bind(this);
-    const clearLeafSwitchingState = this.clearLeafSwitchingState.bind(this);
+    const hasSubpathNavigationInOpenArgs = (args: unknown[]) => this.hasSubpathNavigationInOpenArgs(args);
+    const syncLeafPendingData = (leaf: WorkspaceLeaf) => this.syncLeafPendingData(leaf);
+    const confirmLeafSwitchIfNeeded = (leaf: WorkspaceLeaf, filePath: string | null) => this.confirmLeafSwitchIfNeeded(leaf, filePath);
+    const getTargetFilePathFromOpenArgs = (args: unknown[]) => this.getTargetFilePathFromOpenArgs(args);
+    const scheduleLiveRequestSaveWrap = (view: TextFileView) => this.scheduleLiveRequestSaveWrap(view);
+    const captureLeafSavedData = (leaf: WorkspaceLeaf) => this.captureLeafSavedData(leaf);
+    const schedulePendingDataRestoreInLeaf = (leaf: WorkspaceLeaf) => this.schedulePendingDataRestoreInLeaf(leaf);
+    const scheduleLeafCursorRestore = (leaf: WorkspaceLeaf, shouldRestoreCursor: boolean) => this.scheduleLeafCursorRestore(leaf, shouldRestoreCursor);
+    const clearLeafSwitchingState = (leaf: WorkspaceLeaf) => this.clearLeafSwitchingState(leaf);
     const { fileSwitchingLeaves } = this;
 
     const wrappedOpenFile = async function wrappedOpenFile(this: WorkspaceLeaf, ...args: unknown[]) {
@@ -525,7 +541,9 @@ export class AutoSaveController {
       try {
         return await callWithArgs(originalOpenFile, this, ...args);
       } finally {
-        scheduleLiveRequestSaveWrap(this.view as unknown as TextFileView);
+        if (hasRequestSave(this.view)) {
+          scheduleLiveRequestSaveWrap(this.view);
+        }
         void captureLeafSavedData(this);
         schedulePendingDataRestoreInLeaf(this);
         scheduleLeafCursorRestore(this, shouldRestoreCursor);
@@ -537,15 +555,15 @@ export class AutoSaveController {
   }
 
   private createSetViewStateWrapper(originalSetViewState: SetViewStateFn): SetViewStateFn {
-    const hasSubpathNavigationInViewStateArgs = this.hasSubpathNavigationInViewStateArgs.bind(this);
-    const syncLeafPendingData = this.syncLeafPendingData.bind(this);
-    const confirmLeafSwitchIfNeeded = this.confirmLeafSwitchIfNeeded.bind(this);
-    const getTargetFilePathFromViewStateArgs = this.getTargetFilePathFromViewStateArgs.bind(this);
-    const scheduleLiveRequestSaveWrap = this.scheduleLiveRequestSaveWrap.bind(this);
-    const captureLeafSavedData = this.captureLeafSavedData.bind(this);
-    const schedulePendingDataRestoreInLeaf = this.schedulePendingDataRestoreInLeaf.bind(this);
-    const scheduleLeafCursorRestore = this.scheduleLeafCursorRestore.bind(this);
-    const clearLeafSwitchingState = this.clearLeafSwitchingState.bind(this);
+    const hasSubpathNavigationInViewStateArgs = (args: unknown[]) => this.hasSubpathNavigationInViewStateArgs(args);
+    const syncLeafPendingData = (leaf: WorkspaceLeaf) => this.syncLeafPendingData(leaf);
+    const confirmLeafSwitchIfNeeded = (leaf: WorkspaceLeaf, filePath: string | null) => this.confirmLeafSwitchIfNeeded(leaf, filePath);
+    const getTargetFilePathFromViewStateArgs = (args: unknown[]) => this.getTargetFilePathFromViewStateArgs(args);
+    const scheduleLiveRequestSaveWrap = (view: TextFileView) => this.scheduleLiveRequestSaveWrap(view);
+    const captureLeafSavedData = (leaf: WorkspaceLeaf) => this.captureLeafSavedData(leaf);
+    const schedulePendingDataRestoreInLeaf = (leaf: WorkspaceLeaf) => this.schedulePendingDataRestoreInLeaf(leaf);
+    const scheduleLeafCursorRestore = (leaf: WorkspaceLeaf, shouldRestoreCursor: boolean) => this.scheduleLeafCursorRestore(leaf, shouldRestoreCursor);
+    const clearLeafSwitchingState = (leaf: WorkspaceLeaf) => this.clearLeafSwitchingState(leaf);
     const { fileSwitchingLeaves } = this;
 
     const wrappedSetViewState = async function wrappedSetViewState(this: WorkspaceLeaf, ...args: unknown[]) {
@@ -561,7 +579,9 @@ export class AutoSaveController {
       try {
         return await callWithArgs(originalSetViewState, this, ...args);
       } finally {
-        scheduleLiveRequestSaveWrap(this.view as unknown as TextFileView);
+        if (hasRequestSave(this.view)) {
+          scheduleLiveRequestSaveWrap(this.view);
+        }
         void captureLeafSavedData(this);
         schedulePendingDataRestoreInLeaf(this);
         scheduleLeafCursorRestore(this, shouldRestoreCursor);
@@ -573,10 +593,10 @@ export class AutoSaveController {
   }
 
   private createDetachWrapper(originalDetach: DetachFn): DetachFn {
-    const getLeafMarkdownFilePath = this.getLeafMarkdownFilePath.bind(this);
-    const syncPendingDataForFile = this.syncPendingDataForFile.bind(this);
-    const getLeafWindow = this.getLeafWindow.bind(this);
-    const discardPendingChangesInLeaf = this.discardPendingChangesInLeaf.bind(this);
+    const getLeafMarkdownFilePath = (leaf: WorkspaceLeaf) => this.getLeafMarkdownFilePath(leaf);
+    const syncPendingDataForFile = (filePath: string) => this.syncPendingDataForFile(filePath);
+    const getLeafWindow = (leaf: WorkspaceLeaf) => this.getLeafWindow(leaf);
+    const discardPendingChangesInLeaf = (leaf: WorkspaceLeaf, filePath: string) => this.discardPendingChangesInLeaf(leaf, filePath);
     const getSettings = this.getSettings;
     const { pendingSaveQueue } = this;
 
@@ -591,8 +611,9 @@ export class AutoSaveController {
         getSettings().disableAutoSave &&
         pendingSaveQueue.has(filePath)
       ) {
-        const targetWindow = getLeafWindow(this) ?? window;
-        const shouldDiscardUnsavedChanges = targetWindow.confirm(
+        const targetWindow = getLeafWindow(this);
+        const confirmWindow = isWindowWithConfirm(targetWindow) ? targetWindow : window;
+        const shouldDiscardUnsavedChanges = confirmWindow.confirm(
           "This note has unsaved changes. Close it and discard those changes?"
         );
 
@@ -610,9 +631,9 @@ export class AutoSaveController {
   }
 
   private createDeleteWrapper(originalDelete: DeleteFileFn): DeleteFileFn {
-    const getTargetFilePathFromDeleteArgs = this.getTargetFilePathFromDeleteArgs.bind(this);
-    const confirmDeleteIfNeeded = this.confirmDeleteIfNeeded.bind(this);
-    const discardPendingChangesForDeletedFile = this.discardPendingChangesForDeletedFile.bind(this);
+    const getTargetFilePathFromDeleteArgs = (args: unknown[]) => this.getTargetFilePathFromDeleteArgs(args);
+    const confirmDeleteIfNeeded = (filePath: string) => this.confirmDeleteIfNeeded(filePath);
+    const discardPendingChangesForDeletedFile = (filePath: string) => this.discardPendingChangesForDeletedFile(filePath);
     const { confirmedDeletionPaths } = this;
 
     const wrappedDelete = async function wrappedDelete(this: unknown, ...args: unknown[]) {
@@ -698,6 +719,16 @@ export class AutoSaveController {
 
   private unwrapWrappedFunction<T>(fn: T): T {
     return (fn as T & WrappedFunctionMetadata<T>).__ascOriginal ?? fn;
+  }
+
+  private getFileManagerWithTrashFile(): FileManagerWithTrashFile | undefined {
+    const appWithOptionalFileManager = this.app as App & { fileManager?: unknown };
+    const candidate = appWithOptionalFileManager.fileManager;
+    if (typeof candidate !== "object" || candidate === null) {
+      return undefined;
+    }
+
+    return candidate as FileManagerWithTrashFile;
   }
 
   private attachWindowObservers(targetWindow: Window | null) {
@@ -887,8 +918,9 @@ export class AutoSaveController {
       return true;
     }
 
-    const targetWindow = this.getLeafWindow(leaf) ?? window;
-    const shouldDiscardUnsavedChanges = targetWindow.confirm(
+    const targetWindow = this.getLeafWindow(leaf);
+    const confirmWindow = isWindowWithConfirm(targetWindow) ? targetWindow : window;
+    const shouldDiscardUnsavedChanges = confirmWindow.confirm(
       "This note has unsaved changes. Switch notes and discard those changes?"
     );
     if (!shouldDiscardUnsavedChanges) {
@@ -905,8 +937,9 @@ export class AutoSaveController {
     }
 
     const leaf = this.findLeavesForFilePath(filePath)[0] ?? null;
-    const targetWindow = (leaf && this.getLeafWindow(leaf)) ?? window;
-    return targetWindow.confirm("This note has unsaved changes. Delete the file and discard those changes?");
+    const targetWindow = leaf ? this.getLeafWindow(leaf) : null;
+    const confirmWindow = isWindowWithConfirm(targetWindow) ? targetWindow : window;
+    return confirmWindow.confirm("This note has unsaved changes. Delete the file and discard those changes?");
   }
 
   private getTargetFilePathFromOpenArgs(args: unknown[]): string | null {
@@ -983,7 +1016,7 @@ export class AutoSaveController {
         return;
       }
 
-      this.restorePendingDataIntoLeaf(leaf.view as unknown as TextFileView & { data?: string }, filePath);
+      this.restorePendingDataIntoLeaf(leaf.view as TextFileView & { data?: string }, filePath);
     }, 0);
   }
 
@@ -1020,7 +1053,8 @@ export class AutoSaveController {
 
     this.pendingSaveQueue.refreshAllLatestData();
 
-    const shouldDiscardUnsavedChanges = targetWindow.confirm(
+    const confirmWindow = isWindowWithConfirm(targetWindow) ? targetWindow : window;
+    const shouldDiscardUnsavedChanges = confirmWindow.confirm(
       "You have unsaved changes. Quit Obsidian and discard those changes?"
     );
     if (!shouldDiscardUnsavedChanges) {
@@ -1232,7 +1266,7 @@ export class AutoSaveController {
       return null;
     }
 
-    return browserWindow as ElectronBrowserWindow;
+    return browserWindow;
   }
 
   private async handleWindowCloseRequest(): Promise<void> {
@@ -1286,7 +1320,7 @@ export class AutoSaveController {
   }
 
   private wrapSaveCommand(): void {
-    const markActiveFileManualSaveRequested = this.markActiveFileManualSaveRequested.bind(this);
+    const markActiveFileManualSaveRequested = () => this.markActiveFileManualSaveRequested();
     const saveCommandDefinition = this.getSaveCommandDefinition();
     if (!saveCommandDefinition || typeof saveCommandDefinition.checkCallback !== "function") {
       return;
@@ -1307,7 +1341,7 @@ export class AutoSaveController {
   }
 
   private wrapReloadWithoutSavingCommand(): void {
-    const prepareForReloadWithoutSaving = this.prepareForReloadWithoutSaving.bind(this);
+    const prepareForReloadWithoutSaving = () => this.prepareForReloadWithoutSaving();
     const reloadWithoutSavingCommandDefinition = this.getReloadWithoutSavingCommandDefinition();
     if (!reloadWithoutSavingCommandDefinition || typeof reloadWithoutSavingCommandDefinition.callback !== "function") {
       return;

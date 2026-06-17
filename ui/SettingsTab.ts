@@ -1,4 +1,4 @@
-import { App, ColorComponent, PluginSettingTab, Setting } from "obsidian";
+import { App, ColorComponent, PluginSettingTab, Setting, TextComponent } from "obsidian";
 import type { AutoSaveControlSettings } from "../settings/AutoSaveSettings";
 
 export interface SettingsHost {
@@ -7,6 +7,13 @@ export interface SettingsHost {
   applyStatusColors(): void;
   applyStatusIconSize(): void;
 }
+
+type LegacyColorTextSetting = Setting & {
+  addText: (callback: (textComponent: TextComponent) => unknown) => Setting;
+};
+type SettingWithColorPicker = LegacyColorTextSetting & {
+  addColorPicker: (callback: (colorPicker: ColorComponent) => ColorComponent) => Setting;
+};
 
 export class AutoSaveControlSettingsTab extends PluginSettingTab {
   constructor(app: App, private readonly host: SettingsHost) {
@@ -22,7 +29,7 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName("Autosave Control")
+      .setName("General")
       .setHeading();
 
     new Setting(containerEl)
@@ -147,14 +154,15 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
       .setName(options.name)
       .setDesc(options.description);
 
-    if ("addColorPicker" in setting) {
-      setting.addColorPicker((colorPicker: ColorComponent) =>
+    const maybeSettingWithColorPicker = setting as Setting & Partial<SettingWithColorPicker>;
+    if (typeof maybeSettingWithColorPicker.addColorPicker === "function") {
+      maybeSettingWithColorPicker.addColorPicker((colorPicker: ColorComponent) =>
         colorPicker.setValue(options.getValue()).onChange(options.setValue)
       );
       return;
     }
 
-    setting.addText((textComponent) =>
+    (setting as LegacyColorTextSetting).addText((textComponent: TextComponent) =>
       textComponent.setValue(options.getValue()).onChange(options.setValue)
     );
   }
