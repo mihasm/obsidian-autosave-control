@@ -34,7 +34,7 @@ export class PendingSaveQueue {
       existingPendingSave.view = view;
 
       if (existingPendingSave.timeoutId != null) {
-        clearTimeout(existingPendingSave.timeoutId);
+        window.clearTimeout(existingPendingSave.timeoutId);
       }
 
       existingPendingSave.timeoutId = this.createTimeout(filePath);
@@ -107,7 +107,7 @@ export class PendingSaveQueue {
     }
 
     if (pendingSave.timeoutId !== null) {
-      clearTimeout(pendingSave.timeoutId);
+      window.clearTimeout(pendingSave.timeoutId);
     }
 
     this.pendingSavesByPath.delete(oldPath);
@@ -120,7 +120,7 @@ export class PendingSaveQueue {
   refreshScheduling() {
     for (const [filePath, pendingSave] of this.pendingSavesByPath.entries()) {
       if (pendingSave.timeoutId !== null) {
-        clearTimeout(pendingSave.timeoutId);
+        window.clearTimeout(pendingSave.timeoutId);
       }
 
       pendingSave.timeoutId = this.createTimeout(filePath);
@@ -134,10 +134,10 @@ export class PendingSaveQueue {
     }
 
     if (pendingSave.timeoutId !== null) {
-      clearTimeout(pendingSave.timeoutId);
+      window.clearTimeout(pendingSave.timeoutId);
     }
     if (pendingSave.ramRefreshIntervalId !== null) {
-      clearInterval(pendingSave.ramRefreshIntervalId);
+      window.clearInterval(pendingSave.ramRefreshIntervalId);
     }
     this.pendingSavesByPath.delete(filePath);
     this.emitPendingSaveCount();
@@ -157,10 +157,10 @@ export class PendingSaveQueue {
     }
 
     if (pendingSave.timeoutId !== null) {
-      clearTimeout(pendingSave.timeoutId);
+      window.clearTimeout(pendingSave.timeoutId);
     }
     if (pendingSave.ramRefreshIntervalId !== null) {
-      clearInterval(pendingSave.ramRefreshIntervalId);
+      window.clearInterval(pendingSave.ramRefreshIntervalId);
     }
 
     this.refreshLatestData(filePath);

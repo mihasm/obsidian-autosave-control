@@ -14,10 +14,16 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
   }
 
   display(): void {
+    this.renderSettings();
+  }
+
+  private renderSettings(): void {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Autosave Control" });
+    new Setting(containerEl)
+      .setName("Autosave Control")
+      .setHeading();
 
     new Setting(containerEl)
       .setName("Disable autosave completely")
@@ -26,7 +32,7 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
         toggleComponent.setValue(this.host.settings.disableAutoSave).onChange(async (value) => {
           this.host.settings.disableAutoSave = value;
           await this.host.saveSettings();
-          this.display();
+          this.renderSettings();
         })
       );
 
@@ -64,7 +70,7 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
         toggleComponent.setValue(this.host.settings.deferWorkspaceLayoutSaves).onChange(async (value) => {
           this.host.settings.deferWorkspaceLayoutSaves = value;
           await this.host.saveSettings();
-          this.display();
+          this.renderSettings();
         })
       );
 
@@ -141,9 +147,8 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
       .setName(options.name)
       .setDesc(options.description);
 
-    const addColorPicker = setting.addColorPicker;
-    if (addColorPicker) {
-      addColorPicker.call(setting, (colorPicker: ColorComponent) =>
+    if ("addColorPicker" in setting) {
+      setting.addColorPicker((colorPicker: ColorComponent) =>
         colorPicker.setValue(options.getValue()).onChange(options.setValue)
       );
       return;

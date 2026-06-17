@@ -2,7 +2,7 @@ import { App } from "obsidian";
 import { dlog } from "../debug";
 
 type AdapterWriteFn = (normalizedPath: string, data: string, options?: unknown) => Promise<void>;
-type WrappedWriteFn = AdapterWriteFn & { __ascOriginal?: AdapterWriteFn };
+type WrappedWriteMetadata<T> = { __ascOriginal?: T };
 
 type PendingWorkspaceWrite = {
   normalizedPath: string;
@@ -118,7 +118,13 @@ export class WorkspaceLayoutSaveController {
   }
 
   private createAdapterWriteWrapper(originalAdapterWrite: AdapterWriteFn): AdapterWriteFn {
-    const controller = this;
+    const isEnabled = this.isEnabled;
+    const isWorkspaceLayoutPath = this.isWorkspaceLayoutPath.bind(this);
+    const schedule = this.schedule.bind(this);
+    const allowImmediateWrite = () => this.allowImmediateWrite;
+    const setPendingWrite = (pendingWrite: PendingWorkspaceWrite) => {
+      this.pendingWrite = pendingWrite;
+    };
 
     const wrappedAdapterWrite = async function wrappedAdapterWrite(
       this: unknown,
@@ -127,15 +133,16 @@ export class WorkspaceLayoutSaveController {
       options?: unknown,
     ) {
       if (
-        controller.allowImmediateWrite ||
-        !controller.isEnabled() ||
-        !controller.isWorkspaceLayoutPath(normalizedPath)
+        allowImmediateWrite() ||
+        !isEnabled() ||
+        !isWorkspaceLayoutPath(normalizedPath)
       ) {
-        return originalAdapterWrite.call(this, normalizedPath, data, options);
+        await originalAdapterWrite.call(this, normalizedPath, data, options);
+        return;
       }
 
-      controller.pendingWrite = { normalizedPath, data, options };
-      controller.schedule();
+      setPendingWrite({ normalizedPath, data, options });
+      schedule();
       dlog("Deferred workspace layout write", normalizedPath);
     };
 
@@ -153,13 +160,13 @@ export class WorkspaceLayoutSaveController {
       || candidatePath.endsWith("/workspace-mobile.json");
   }
 
-  private markWrappedFunction<T extends Function>(wrapper: T, original: T): T {
-    const wrappedFunction = wrapper as unknown as WrappedWriteFn;
-    wrappedFunction.__ascOriginal = original as unknown as AdapterWriteFn;
+  private markWrappedFunction<T>(wrapper: T, original: T): T {
+    const wrappedFunction = wrapper as T & WrappedWriteMetadata<T>;
+    wrappedFunction.__ascOriginal = original;
     return wrapper;
   }
 
-  private unwrapWrappedFunction<T extends Function>(fn: T): T {
-    return ((fn as unknown as WrappedWriteFn).__ascOriginal as T | undefined) ?? fn;
+  private unwrapWrappedFunction<T>(fn: T): T {
+    return (fn as T & WrappedWriteMetadata<T>).__ascOriginal ?? fn;
   }
 }

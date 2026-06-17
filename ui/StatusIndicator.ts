@@ -45,6 +45,6 @@ export class SaveStatusIndicator {
   }
 
   private removeStaleIndicators() {
-    document.querySelectorAll(".save-status-icon").forEach((element) => element.remove());
+    activeDocument.querySelectorAll(".save-status-icon").forEach((element: Element) => element.remove());
   }
 }

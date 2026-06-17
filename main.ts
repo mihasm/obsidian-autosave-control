@@ -1,7 +1,6 @@
 import { Plugin } from "obsidian";
 import { AutoSaveController } from "./autosave/AutoSaveController";
 import { DEFAULT_SETTINGS, type AutoSaveControlSettings } from "./settings/AutoSaveSettings";
-import { installStatusStyles } from "./styles/installStatusStyles";
 import { AutoSaveControlSettingsTab } from "./ui/SettingsTab";
 import { SaveStatusIndicator } from "./ui/StatusIndicator";
 
@@ -10,14 +9,14 @@ export default class AutoSaveControlPlugin extends Plugin {
 
   private saveStatusIndicator!: SaveStatusIndicator;
   private autosaveController!: AutoSaveController;
-  private stylesElement: HTMLStyleElement | null = null;
   private runtimeCleanup: (() => void) | null = null;
 
   async onload() {
     const globalState = window as typeof window & { __ascRuntimeCleanup?: (() => void) | null };
     globalState.__ascRuntimeCleanup?.();
 
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loadedSettings = await this.loadData() as Partial<AutoSaveControlSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings ?? {});
 
     this.saveStatusIndicator = new SaveStatusIndicator(this);
     this.saveStatusIndicator.attach();
@@ -28,7 +27,6 @@ export default class AutoSaveControlPlugin extends Plugin {
     });
     this.autosaveController.enable();
 
-    this.installStyles();
     this.applyStatusColors();
     this.applyStatusIconSize();
 
@@ -37,11 +35,6 @@ export default class AutoSaveControlPlugin extends Plugin {
     this.runtimeCleanup = () => {
       this.autosaveController.disable();
       this.saveStatusIndicator.detach();
-
-      if (this.stylesElement) {
-        this.stylesElement.remove();
-        this.stylesElement = null;
-      }
     };
 
     globalState.__ascRuntimeCleanup = this.runtimeCleanup;
@@ -64,23 +57,15 @@ export default class AutoSaveControlPlugin extends Plugin {
   }
 
   applyStatusColors(): void {
-    const rootElement = document.documentElement;
+    const rootElement = activeDocument.documentElement;
     rootElement.style.setProperty("--asc-saved-color", this.settings.savedStatusColor);
     rootElement.style.setProperty("--asc-pending-color", this.settings.pendingStatusColor);
   }
 
   applyStatusIconSize(): void {
-    document.documentElement.style.setProperty(
+    activeDocument.documentElement.style.setProperty(
       "--asc-icon-size",
       `${this.settings.statusIconSizePx}px`
     );
-  }
-
-  private installStyles(): void {
-    if (this.stylesElement) {
-      return;
-    }
-
-    this.stylesElement = installStatusStyles();
   }
 }

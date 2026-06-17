@@ -108,7 +108,7 @@ export class EditActivityTracker {
   private isEventFromMarkdownEditor(event: Event): boolean {
     const targetElement = event.target instanceof Element
       ? event.target
-      : (document.activeElement instanceof Element ? document.activeElement : null);
+      : (activeDocument.activeElement instanceof Element ? activeDocument.activeElement : null);
     if (!targetElement) {
       return false;
     }
