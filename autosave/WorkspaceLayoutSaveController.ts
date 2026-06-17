@@ -17,11 +17,7 @@ function callAdapterWrite(
   data: string,
   options?: unknown,
 ): Promise<void> {
-  return Reflect.apply(
-    fn as (this: unknown, normalizedPath: string, data: string, options?: unknown) => Promise<void>,
-    thisArg,
-    [normalizedPath, data, options],
-  ) as Promise<void>;
+  return fn.call(thisArg, normalizedPath, data, options);
 }
 
 export class WorkspaceLayoutSaveController {

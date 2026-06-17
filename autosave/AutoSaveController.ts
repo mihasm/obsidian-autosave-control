@@ -55,7 +55,7 @@ function callWithArgs<TThis, TArgs extends unknown[], TResult>(
   thisArg: TThis,
   ...args: TArgs
 ): TResult {
-  return Reflect.apply(fn as (this: TThis, ...args: TArgs) => TResult, thisArg, args) as TResult;
+  return fn.call(thisArg, ...args);
 }
 
 function hasRequestSave(value: unknown): value is TextFileView {
