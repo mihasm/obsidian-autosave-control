@@ -396,7 +396,7 @@ export class AutoSaveController {
         return saveResult;
       }
 
-      if (controller.shouldHoldSave(this, filePath)) {
+      if (controller.shouldHoldSave(this as unknown as TextFileView, filePath)) {
         controller.pendingSaveQueue.schedule(filePath, this as unknown as TextFileView);
         dlog("Suppressing non-manual save", { filePath, args });
         return;
@@ -458,6 +458,11 @@ export class AutoSaveController {
         dlog("Allowing manual requestSave", { filePath, args });
         controller.markManualSaveRequested(filePath);
         return originalRequestSave.apply(this, args);
+      }
+
+      if (!controller.shouldHoldSave(this, filePath)) {
+        dlog("Ignoring requestSave for clean file", { filePath, args });
+        return;
       }
 
       controller.pendingSaveQueue.schedule(filePath, this);
@@ -1066,15 +1071,20 @@ export class AutoSaveController {
     return false;
   }
 
-  private shouldHoldSave(view: MarkdownView, filePath: string): boolean {
+  private shouldHoldSave(view: TextFileView, filePath: string): boolean {
     if (this.pendingSaveQueue.has(filePath)) {
       return true;
     }
 
-    const textFileView = view as unknown as TextFileView & { data?: string };
+    const textFileView = view as TextFileView & { data?: string };
     const currentData = textFileView.getViewData?.();
     if (typeof currentData !== "string") {
       return false;
+    }
+
+    const lastSavedData = this.lastSavedDataByPath.get(filePath);
+    if (typeof lastSavedData === "string") {
+      return lastSavedData !== currentData;
     }
 
     return textFileView.data !== currentData;
