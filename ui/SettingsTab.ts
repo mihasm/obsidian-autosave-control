@@ -34,7 +34,7 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Disable autosave completely")
-      .setDesc("Only save when you trigger Obsidian's Save File command manually.")
+      .setDesc("Only save when you trigger Obsidian's save file command manually.")
       .addToggle((toggleComponent) =>
         toggleComponent.setValue(this.host.settings.disableAutoSave).onChange(async (value) => {
           this.host.settings.disableAutoSave = value;
@@ -47,7 +47,7 @@ export class AutoSaveControlSettingsTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName("Warning")
         .setDesc(
-          "Automatic saves are fully disabled. Unsaved changes stay only in memory until you use Obsidian's Save File command. Closing Obsidian with pending changes will show a confirmation prompt."
+          "Automatic saves are fully disabled. Unsaved changes stay only in memory until you use Obsidian's save file command. Closing Obsidian with pending changes will show a confirmation prompt."
         );
     }
 

@@ -30,6 +30,7 @@ jobs:
           subject-path: |
             ./main.js
             ./manifest.json
+            ./styles.css
 
       - name: Create GitHub Release
         id: create_release
@@ -64,3 +65,14 @@ jobs:
           asset_path: ./manifest.json  # Path to the manifest.json file
           asset_name: manifest.json    # Name of the file in the release
           asset_content_type: application/json
+
+      # Upload styles.css
+      - name: Upload Release Asset (styles.css)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./styles.css
+          asset_name: styles.css
+          asset_content_type: text/css

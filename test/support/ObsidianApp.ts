@@ -1071,6 +1071,13 @@ class ObsidianApp {
     });
   }
 
+  async getStatusIndicatorFontSize() {
+    return browser.execute(() => {
+      const element = document.querySelector(".save-status-icon") as HTMLElement | null;
+      return element ? getComputedStyle(element).fontSize : null;
+    });
+  }
+
   async openPluginSettingsTab() {
     await browser.execute((pluginId: string) => {
       const app = (window as typeof window & { app: any }).app;

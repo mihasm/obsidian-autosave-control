@@ -57,15 +57,13 @@ export default class AutoSaveControlPlugin extends Plugin {
   }
 
   applyStatusColors(): void {
-    const rootElement = activeDocument.documentElement;
-    rootElement.style.setProperty("--asc-saved-color", this.settings.savedStatusColor);
-    rootElement.style.setProperty("--asc-pending-color", this.settings.pendingStatusColor);
+    this.saveStatusIndicator.setColors(
+      this.settings.savedStatusColor,
+      this.settings.pendingStatusColor,
+    );
   }
 
   applyStatusIconSize(): void {
-    activeDocument.documentElement.style.setProperty(
-      "--asc-icon-size",
-      `${this.settings.statusIconSizePx}px`
-    );
+    this.saveStatusIndicator.setIconSize(this.settings.statusIconSizePx);
   }
 }

@@ -17,8 +17,11 @@ function callAdapterWrite(
   data: string,
   options?: unknown,
 ): Promise<void> {
-  const boundFn: (normalizedPath: string, data: string, options?: unknown) => Promise<void> = fn.bind(thisArg);
-  return boundFn(normalizedPath, data, options);
+  return (fn.bind(thisArg) as (normalizedPath: string, data: string, options?: unknown) => Promise<void>)(
+    normalizedPath,
+    data,
+    options,
+  );
 }
 
 export class WorkspaceLayoutSaveController {

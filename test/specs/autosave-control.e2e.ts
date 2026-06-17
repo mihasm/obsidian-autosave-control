@@ -1041,6 +1041,15 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.getStatusIndicatorColor()).toBe("rgb(0, 0, 255)");
   });
 
+  it("changes the status icon size in pixels", async () => {
+    await enableDelayedAutosave(30);
+    await ObsidianApp.openPluginSettingsTab();
+    await ObsidianApp.setTextSettingValue("Status icon size (px)", "24");
+
+    await ObsidianApp.waitForSavedStatus();
+    await expect(await ObsidianApp.getStatusIndicatorFontSize()).toBe("24px");
+  });
+
   it("keeps the status saved after renaming an existing file via the title in manual-only mode", async () => {
     const notePath = "settings/rename-title-manual-source.md";
     const expectedNotePath = "settings/rename-title-manual-renamed.md";

@@ -55,8 +55,7 @@ function callWithArgs<TThis, TArgs extends unknown[], TResult>(
   thisArg: TThis,
   ...args: TArgs
 ): TResult {
-  const boundFn: (...boundArgs: TArgs) => TResult = fn.bind(thisArg);
-  return boundFn(...args);
+  return (fn.bind(thisArg) as (...boundArgs: TArgs) => TResult)(...args);
 }
 
 function hasRequestSave(value: unknown): value is TextFileView {
@@ -127,7 +126,7 @@ export class AutoSaveController {
           return;
         }
 
-        this.pendingSaveQueue.schedule(filePath, view as unknown as TextFileView);
+        this.pendingSaveQueue.schedule(filePath, view);
       },
       (event) => this.isManualSaveShortcut(event),
       (view, filePath, event) => this.handleManualSaveShortcut(view, filePath, event),
@@ -181,9 +180,7 @@ export class AutoSaveController {
       trash?: DeleteFileFn;
       delete?: DeleteFileFn;
     };
-    const writableFileManagerWithTrashFile = fileManagerWithTrashFile as {
-      trashFile?: DeleteFileFn;
-    } | undefined;
+    const writableFileManagerWithTrashFile = fileManagerWithTrashFile;
 
     this.originalSave = this.unwrapWrappedFunction(markdownViewPrototype.save);
     this.installedSaveWrapper = this.createSaveWrapper(this.originalSave);
@@ -249,7 +246,7 @@ export class AutoSaveController {
       }
 
       this.attachWindowObservers(this.getViewWindow(leaf.view));
-      this.scheduleLiveRequestSaveWrap(leaf.view as unknown as TextFileView);
+      this.scheduleLiveRequestSaveWrap(leaf.view);
     });
 
     if (!Platform.isMobileApp) {
@@ -279,7 +276,7 @@ export class AutoSaveController {
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof MarkdownView) {
         this.attachWindowObservers(this.getViewWindow(leaf.view));
-        this.scheduleLiveRequestSaveWrap(leaf.view as unknown as TextFileView);
+        this.scheduleLiveRequestSaveWrap(leaf.view);
         void this.captureLeafSavedData(leaf);
       }
     }
@@ -307,9 +304,7 @@ export class AutoSaveController {
       trash?: DeleteFileFn;
       delete?: DeleteFileFn;
     };
-    const writableFileManagerWithTrashFile = fileManagerWithTrashFile as {
-      trashFile?: DeleteFileFn;
-    } | undefined;
+    const writableFileManagerWithTrashFile = fileManagerWithTrashFile;
 
     if (this.originalSave && markdownViewPrototype.save === this.installedSaveWrapper) {
       markdownViewPrototype.save = this.originalSave;
@@ -729,7 +724,7 @@ export class AutoSaveController {
       return undefined;
     }
 
-    return candidate as FileManagerWithTrashFile;
+    return candidate;
   }
 
   private attachWindowObservers(targetWindow: Window | null) {
@@ -797,7 +792,7 @@ export class AutoSaveController {
     this.editActivityTracker.detachAll();
 
     for (const [targetWindow, beforeUnload] of this.beforeUnloadListenersByWindow.entries()) {
-      targetWindow.removeEventListener("beforeunload", beforeUnload, { capture: true } as AddEventListenerOptions);
+      targetWindow.removeEventListener("beforeunload", beforeUnload, { capture: true });
     }
 
     for (const [targetWindow, quitShortcutListener] of this.quitShortcutListenersByWindow.entries()) {
@@ -1017,7 +1012,7 @@ export class AutoSaveController {
         return;
       }
 
-      this.restorePendingDataIntoLeaf(leaf.view as TextFileView & { data?: string }, filePath);
+      this.restorePendingDataIntoLeaf(leaf.view, filePath);
     }, 0);
   }
 

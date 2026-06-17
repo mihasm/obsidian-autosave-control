@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"lint": "eslint main.ts debug.ts autosave ui settings",
 		"wdio": "node ./scripts/run-wdio.mjs",
 		"wdio:desktop": "node ./scripts/run-wdio.mjs --desktop-only",
 		"wdio:android": "node ./scripts/run-android-wdio.mjs",
@@ -28,10 +29,10 @@
 	"author": "Miha Smrekar",
 	"license": "MIT",
 	"devDependencies": {
+		"@eslint/js": "^9.39.4",
+		"@eslint/json": "^0.14.0",
 		"@types/mocha": "^10.0.10",
 		"@types/node": "^16.18.126",
-		"@typescript-eslint/eslint-plugin": "5.29.0",
-		"@typescript-eslint/parser": "5.29.0",
 		"@wdio/appium-service": "^9.27.1",
 		"@wdio/cli": "^9.27.0",
 		"@wdio/globals": "^9.27.0",
@@ -41,12 +42,15 @@
 		"appium": "^3.4.2",
 		"appium-uiautomator2-driver": "^7.5.0",
 		"esbuild": "0.17.3",
+		"eslint": "^9.39.4",
+		"eslint-plugin-obsidianmd": "^0.3.0",
 		"expect-webdriverio": "^5.6.5",
 		"mocha": "^11.7.5",
 		"obsidian": "latest",
 		"tslib": "2.4.0",
 		"tsx": "^4.21.0",
-		"typescript": "4.7.4",
+		"typescript": "^4.9.5",
+		"typescript-eslint": "^8.61.1",
 		"wdio-obsidian-reporter": "^3.0.2",
 		"wdio-obsidian-service": "^3.0.2"
 	}

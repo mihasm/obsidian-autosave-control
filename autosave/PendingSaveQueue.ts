@@ -174,7 +174,7 @@ export class PendingSaveQueue {
 
     const attachedViewFilePath = pendingSave.view.file?.path;
     if (!this.shouldWriteDirectlyToVault() && attachedViewFilePath === filePath) {
-      await originalSave.call(pendingSave.view as unknown as MarkdownView);
+      await originalSave.call(pendingSave.view);
       await this.onFlushComplete?.(filePath);
       return;
     }
