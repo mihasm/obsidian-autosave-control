@@ -37,12 +37,16 @@ type ElectronBrowserWindow = {
   close?: () => void;
   destroy?: () => void;
 };
+type ElectronAppQuitListener = () => void;
+type ElectronApp = {
+  exit?: (exitCode: number) => void;
+  quit?: () => void;
+  on?: (event: "before-quit", listener: ElectronAppQuitListener) => void;
+  removeListener?: (event: "before-quit", listener: ElectronAppQuitListener) => void;
+};
 type ElectronModule = {
   remote?: {
-    app?: {
-      exit?: (exitCode: number) => void;
-      quit?: () => void;
-    };
+    app?: ElectronApp;
     getCurrentWindow?: () => ElectronBrowserWindow | null;
   };
 };
@@ -117,6 +121,11 @@ export class AutoSaveController {
   private quitShortcutIntentTimestampMs = 0;
   private isHandlingWindowCloseRequest = false;
   private bypassNextWindowCloseInterception = false;
+  // Set when Electron fires "before-quit" — i.e. the whole application is
+  // quitting (Cmd+Q / menu Quit), as opposed to a single window being closed.
+  private appIsQuitting = false;
+  private electronApp: ElectronApp | null = null;
+  private electronAppQuitListener: ElectronAppQuitListener | null = null;
 
   constructor(private readonly app: App, private readonly getSettings: () => AutoSaveControlSettings) {
     this.editActivityTracker = new EditActivityTracker(
@@ -250,6 +259,8 @@ export class AutoSaveController {
     });
 
     if (!Platform.isMobileApp) {
+      this.registerAppQuitObserver();
+
       this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
         this.pendingSaveQueue.refreshAllLatestData();
         const quitWasRequestedWithShortcut = this.wasQuitShortcutIntentRecentlyMarked();
@@ -264,9 +275,18 @@ export class AutoSaveController {
           }
 
           await this.workspaceLayoutSaveController.flush();
-          this.isUnloading = true;
           this.clearQuitShortcutIntent();
-          this.exitApplicationAfterFlush();
+
+          // The workspace "quit" event fires per window, both when the whole
+          // application is quitting AND when a single window is being closed
+          // (e.g. one of several open vaults). Only force an explicit exit when
+          // Electron told us the whole app is quitting; forcing it on a single
+          // window close would tear down the app and every other vault window
+          // (issue #29). Obsidian closes the lone window on its own.
+          if (this.appIsQuitting) {
+            this.isUnloading = true;
+            this.exitApplicationAfterFlush();
+          }
         });
       });
     }
@@ -386,6 +406,7 @@ export class AutoSaveController {
       this.workspaceQuitEventRef = undefined;
     }
 
+    this.unregisterAppQuitObserver();
     this.detachAllWindowObservers();
     this.restoreLiveRequestSaveOverrides();
     this.clearManualSaveRequests();
@@ -753,7 +774,7 @@ export class AutoSaveController {
 
       if (!this.wasQuitShortcutIntentRecentlyMarked() && this.pendingSaveQueue.hasAny()) {
         event.preventDefault();
-        void this.handleWindowCloseRequest();
+        void this.handleWindowCloseRequest(targetWindow);
         return;
       }
 
@@ -777,7 +798,7 @@ export class AutoSaveController {
       this.pendingSaveQueue.refreshAllLatestData();
       if (!this.wasQuitShortcutIntentRecentlyMarked() && this.pendingSaveQueue.hasAny()) {
         event.preventDefault();
-        void this.handleWindowCloseRequest();
+        void this.handleWindowCloseRequest(targetWindow);
       }
     };
 
@@ -1210,6 +1231,35 @@ export class AutoSaveController {
     this.manualSaveRequestTimeoutsByPath.clear();
   }
 
+  private registerAppQuitObserver(): void {
+    const globalState = window as ElectronRequireHost;
+    const electron = globalState.require?.("electron");
+    const app = electron?.remote?.app;
+    if (!app || typeof app.on !== "function") {
+      return;
+    }
+
+    const listener: ElectronAppQuitListener = () => {
+      this.appIsQuitting = true;
+    };
+    app.on("before-quit", listener);
+    this.electronApp = app;
+    this.electronAppQuitListener = listener;
+  }
+
+  private unregisterAppQuitObserver(): void {
+    if (
+      this.electronApp
+      && this.electronAppQuitListener
+      && typeof this.electronApp.removeListener === "function"
+    ) {
+      this.electronApp.removeListener("before-quit", this.electronAppQuitListener);
+    }
+    this.electronApp = null;
+    this.electronAppQuitListener = null;
+    this.appIsQuitting = false;
+  }
+
   private exitApplicationAfterFlush(): boolean {
     const globalState = window as ElectronRequireHost;
     const electron = globalState.require?.("electron");
@@ -1265,7 +1315,7 @@ export class AutoSaveController {
     return browserWindow;
   }
 
-  private async handleWindowCloseRequest(): Promise<void> {
+  private async handleWindowCloseRequest(targetWindow: Window): Promise<void> {
     if (this.isHandlingWindowCloseRequest) {
       return;
     }
@@ -1280,16 +1330,43 @@ export class AutoSaveController {
       }
 
       await this.workspaceLayoutSaveController.flush();
-      this.isUnloading = true;
       this.clearQuitShortcutIntent();
+      // Close only the window the user is closing. Re-issuing the close lets the
+      // window go through, so bypass our own interception for that one event.
+      // Crucially this must NOT quit the whole application: with multiple vaults
+      // open, each vault is a separate window in the same Electron process, and
+      // quitting here would tear them all down (issue #29).
       this.bypassNextWindowCloseInterception = true;
-      if (!this.exitApplicationAfterFlush()) {
+      if (!this.closeWindowAfterFlush(targetWindow)) {
         this.bypassNextWindowCloseInterception = false;
-        this.isUnloading = false;
       }
     } finally {
       this.isHandlingWindowCloseRequest = false;
     }
+  }
+
+  private closeWindowAfterFlush(targetWindow: Window): boolean {
+    const browserWindow = this.getElectronBrowserWindow(targetWindow);
+
+    try {
+      if (typeof browserWindow?.close === "function") {
+        browserWindow.close();
+        return true;
+      }
+    } catch {
+      // fall through to harder close path
+    }
+
+    try {
+      if (typeof browserWindow?.destroy === "function") {
+        browserWindow.destroy();
+        return true;
+      }
+    } catch {
+      // no supported explicit close path available
+    }
+
+    return false;
   }
 
   private async forceFlushOpenMarkdownLeaves(): Promise<void> {

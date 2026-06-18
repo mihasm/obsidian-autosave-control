@@ -1,6 +1,6 @@
 {
 	"name": "autosave-control",
-	"version": "1.0.9",
+	"version": "1.0.10",
 	"description": "Delay autosave until editing has stopped for a chosen number of seconds.",
 	"main": "main.js",
 	"scripts": {
@@ -11,9 +11,11 @@
 		"wdio:desktop": "node ./scripts/run-wdio.mjs --desktop-only",
 		"wdio:android": "node ./scripts/run-android-wdio.mjs",
 		"wdio:issue34": "wdio run ./wdio.issue34.conf.mts",
-		"wdio:standard": "wdio run ./wdio.conf.mts --exclude ./test/specs/android.e2e.ts --exclude ./test/specs/quit-save.e2e.ts --exclude ./test/specs/quit-clean.e2e.ts",
+		"wdio:multivault": "wdio run ./wdio.multivault.conf.mts",
+		"wdio:standard": "wdio run ./wdio.conf.mts --exclude ./test/specs/android.e2e.ts --exclude ./test/specs/quit-save.e2e.ts --exclude ./test/specs/quit-clean.e2e.ts --exclude ./test/specs/multi-vault.e2e.ts",
 		"wdio:quit-clean": "node ./scripts/verify-quit-clean.mjs",
 		"wdio:quit-save": "node ./scripts/verify-quit-save.mjs",
+		"wdio:quit-manual": "node ./scripts/verify-quit-manual.mjs",
 		"wdio:reload-no-save": "node ./scripts/verify-reload-no-save.mjs",
 		"wdio:all": "node ./scripts/run-wdio.mjs"
 	},

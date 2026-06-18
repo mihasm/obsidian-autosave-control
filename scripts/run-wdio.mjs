@@ -6,7 +6,13 @@ const SPEC_DIR = path.resolve("test", "specs");
 const SPECIAL_DESKTOP_SPECS = new Set([
   "quit-clean.e2e.ts",
   "quit-save.e2e.ts",
+  // Manual-mode real Cmd+Q quit (issue #29 follow-up); needs the external
+  // verifier that sends a real quit. Run via `npm run wdio:quit-manual`.
+  "quit-manual.e2e.ts",
   "reload-no-save.e2e.ts",
+  // Multi-vault windows (issues #28/#29). Drives two real vault windows and is
+  // heavier than the standard specs. Run via `npm run wdio:multivault`.
+  "multi-vault.e2e.ts",
 ]);
 const ANDROID_SPEC = "android.e2e.ts";
 const desktopOnly = process.argv.includes("--desktop-only");
@@ -50,6 +56,7 @@ for (const spec of await getDesktopSpecs()) {
 runs.push(
   { label: "Desktop quit clean", command: "node", args: ["./scripts/verify-quit-clean.mjs"] },
   { label: "Desktop quit save", command: "node", args: ["./scripts/verify-quit-save.mjs"] },
+  { label: "Desktop quit manual", command: "node", args: ["./scripts/verify-quit-manual.mjs"] },
   { label: "Desktop reload without saving", command: "node", args: ["./scripts/verify-reload-no-save.mjs"] },
 );
 

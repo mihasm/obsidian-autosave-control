@@ -914,20 +914,22 @@ describe("Autosave Control manual scenarios", () => {
     await browser.execute(() => {
       const app = (window as typeof window & { app: any }).app;
       const plugin = app?.plugins?.plugins?.["autosave-control"] as {
-        autosaveController?: { exitApplicationAfterFlush?: () => void };
+        autosaveController?: { closeWindowAfterFlush?: (targetWindow: Window) => boolean };
       } | undefined;
       const controller = plugin?.autosaveController as {
-        exitApplicationAfterFlush?: () => void;
+        closeWindowAfterFlush?: (targetWindow: Window) => boolean;
       } | undefined;
       const targetWindow = window as typeof window & {
-        __ascOriginalExitApplicationAfterFlush?: () => void;
+        __ascOriginalCloseWindowAfterFlush?: (targetWindow: Window) => boolean;
       };
-      if (!controller?.exitApplicationAfterFlush) {
-        throw new Error("Autosave Control exit handler is not available.");
+      if (!controller?.closeWindowAfterFlush) {
+        throw new Error("Autosave Control window close handler is not available.");
       }
 
-      targetWindow.__ascOriginalExitApplicationAfterFlush = controller.exitApplicationAfterFlush;
-      controller.exitApplicationAfterFlush = () => {};
+      // Stub the actual window close so the flush still runs but the test
+      // window stays open and observable.
+      targetWindow.__ascOriginalCloseWindowAfterFlush = controller.closeWindowAfterFlush;
+      controller.closeWindowAfterFlush = () => true;
     });
 
     try {
@@ -938,18 +940,18 @@ describe("Autosave Control manual scenarios", () => {
       await browser.execute(() => {
         const app = (window as typeof window & { app: any }).app;
         const plugin = app?.plugins?.plugins?.["autosave-control"] as {
-          autosaveController?: { exitApplicationAfterFlush?: () => void };
+          autosaveController?: { closeWindowAfterFlush?: (targetWindow: Window) => boolean };
         } | undefined;
         const controller = plugin?.autosaveController as {
-          exitApplicationAfterFlush?: () => void;
+          closeWindowAfterFlush?: (targetWindow: Window) => boolean;
         } | undefined;
         const targetWindow = window as typeof window & {
-          __ascOriginalExitApplicationAfterFlush?: () => void;
+          __ascOriginalCloseWindowAfterFlush?: (targetWindow: Window) => boolean;
         };
-        if (controller && targetWindow.__ascOriginalExitApplicationAfterFlush) {
-          controller.exitApplicationAfterFlush = targetWindow.__ascOriginalExitApplicationAfterFlush;
+        if (controller && targetWindow.__ascOriginalCloseWindowAfterFlush) {
+          controller.closeWindowAfterFlush = targetWindow.__ascOriginalCloseWindowAfterFlush;
         }
-        delete targetWindow.__ascOriginalExitApplicationAfterFlush;
+        delete targetWindow.__ascOriginalCloseWindowAfterFlush;
       });
     }
   });
