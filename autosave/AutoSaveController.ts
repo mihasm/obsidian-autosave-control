@@ -266,10 +266,12 @@ export class AutoSaveController {
 
       // Capture Obsidian's own window.onbeforeunload quit hook (set during app
       // startup). It is one-shot — it nulls itself when a close begins — so we
-      // re-install it after the user chooses "keep editing".
-      if (typeof window.onbeforeunload === "function") {
-        this.obsidianOnBeforeUnload = window.onbeforeunload as (event: BeforeUnloadEvent) => unknown;
-      }
+      // re-install it after the user chooses "keep editing". This is only a
+      // best-effort capture: Obsidian registers the hook late (registerQuitHook
+      // runs after the workspace layout is ready), so when the plugin loads first
+      // window.onbeforeunload is still null here. The reliable capture happens on
+      // each close in the beforeunload capturing listener below.
+      this.captureObsidianQuitHook();
 
       this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
         this.pendingSaveQueue.refreshAllLatestData();
@@ -803,6 +805,13 @@ export class AutoSaveController {
     };
 
     const beforeUnloadWithPrompt = (event: BeforeUnloadEvent) => {
+      // This listener is attached with { capture: true }, so it runs before
+      // Obsidian's window.onbeforeunload property handler — which nulls itself as
+      // its very first action. Capture the live hook here so we can re-arm it
+      // after a "keep editing" cancel; otherwise the SECOND window close finds a
+      // null hook and closes silently with no prompt (issue #26 follow-up).
+      this.captureObsidianQuitHook();
+
       if (this.isUnloading) {
         return;
       }
@@ -1496,6 +1505,12 @@ export class AutoSaveController {
 
   private removeOrphanedSavingOverlay(): void {
     activeDocument.querySelectorAll(".progress-bar-container").forEach((element) => element.remove());
+  }
+
+  private captureObsidianQuitHook(): void {
+    if (typeof window.onbeforeunload === "function") {
+      this.obsidianOnBeforeUnload = window.onbeforeunload as (event: BeforeUnloadEvent) => unknown;
+    }
   }
 
   private reArmObsidianQuitHook(): void {

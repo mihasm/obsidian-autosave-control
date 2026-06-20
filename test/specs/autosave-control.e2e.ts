@@ -969,6 +969,55 @@ describe("Autosave Control manual scenarios", () => {
     }
   });
 
+  it("re-prompts on a second window close after the first close prompt was cancelled in manual-only mode", async () => {
+    const notePath = "settings/quit-prompt-second-close.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath);
+    await ObsidianApp.typeText("keep me unsaved");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(false); // Cancel = keep editing (both times)
+
+    try {
+      // First X press: drive Obsidian's REAL window-close quit hook. A task is
+      // added, so Obsidian holds the close (defaultPrevented) and shows our
+      // discard prompt.
+      const first = await ObsidianApp.dispatchObsidianBeforeUnload();
+      await expect(first.wasArmed).toBe(true);
+      await expect(first.defaultPrevented).toBe(true);
+      await browser.waitUntil(async () => (await ObsidianApp.getConfirmMessages()).length >= 1, {
+        timeout: 5000,
+        timeoutMsg: "First window-close prompt was not shown.",
+      });
+
+      // Cancel keeps the window open AND must re-arm Obsidian's one-shot quit
+      // hook so the next close is intercepted too.
+      await browser.waitUntil(async () => await ObsidianApp.isObsidianQuitHookArmed(), {
+        timeout: 5000,
+        timeoutMsg: "Obsidian quit hook was not re-armed after the first cancel.",
+      });
+      await expect(await ObsidianApp.getWindowCloseCount()).toBe(0);
+
+      await ObsidianApp.installConfirmStub(false); // reset captured messages; cancel again
+
+      // Second X press without saving: the prompt MUST appear again and the
+      // window must NOT close silently.
+      const second = await ObsidianApp.dispatchObsidianBeforeUnload();
+      await expect(second.wasArmed).toBe(true);
+      await expect(second.defaultPrevented).toBe(true);
+      await browser.waitUntil(async () => (await ObsidianApp.getConfirmMessages()).length >= 1, {
+        timeout: 5000,
+        timeoutMsg: "Second window-close prompt was not shown (silent close regression).",
+      });
+
+      await expect(await ObsidianApp.getWindowCloseCount()).toBe(0);
+      await expect(await ObsidianApp.getActiveFilePath()).toBe(notePath);
+      await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
+    } finally {
+      await ObsidianApp.restoreConfirm();
+    }
+  });
+
   it("cancels the close prompt in manual-only mode and keeps Obsidian open without saving", async () => {
     const notePath = "settings/cancel-quit.md";
 

@@ -1417,6 +1417,59 @@ class ObsidianApp {
       app.workspace.trigger("quit", mockTasks);
     });
   }
+
+  // Drive a real window-close (X button) the way the OS does: dispatch a genuine
+  // "beforeunload" event on the window. Both the plugin's capturing-phase
+  // listener AND Obsidian's window.onbeforeunload property hook fire, just like a
+  // real close. Obsidian's hook nulls itself, triggers the workspace "quit" event
+  // with a real Tasks object, and — if any task is added — holds the close and
+  // only calls window.close() once every task resolves. The manual-mode "keep
+  // editing" task never resolves, so window.close() is never reached.
+  async dispatchObsidianBeforeUnload() {
+    return browser.execute(() => {
+      const targetWindow = window as typeof window & {
+        onbeforeunload: ((event: BeforeUnloadEvent) => unknown) | null;
+        __ascWindowCloseCount?: number;
+      };
+
+      // Count real window.close() calls so a silent close (no prompt, hook not
+      // re-armed) is observable instead of actually tearing down the test window.
+      if (targetWindow.__ascWindowCloseCount === undefined) {
+        targetWindow.__ascWindowCloseCount = 0;
+        const originalClose = targetWindow.close.bind(targetWindow);
+        targetWindow.close = () => {
+          targetWindow.__ascWindowCloseCount = (targetWindow.__ascWindowCloseCount ?? 0) + 1;
+          // Deliberately do NOT call originalClose so the test window survives.
+          void originalClose;
+        };
+      }
+
+      const wasArmed = typeof targetWindow.onbeforeunload === "function";
+      const event = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+      targetWindow.dispatchEvent(event);
+
+      return {
+        wasArmed,
+        defaultPrevented: event.defaultPrevented,
+        windowCloseCount: targetWindow.__ascWindowCloseCount ?? 0,
+      };
+    });
+  }
+
+  async getWindowCloseCount() {
+    return browser.execute(() => {
+      const targetWindow = window as typeof window & { __ascWindowCloseCount?: number };
+      return targetWindow.__ascWindowCloseCount ?? 0;
+    });
+  }
+
+  async isObsidianQuitHookArmed() {
+    return browser.execute(() => {
+      return typeof (window as typeof window & {
+        onbeforeunload: unknown;
+      }).onbeforeunload === "function";
+    });
+  }
 }
 
 export default new ObsidianApp();
