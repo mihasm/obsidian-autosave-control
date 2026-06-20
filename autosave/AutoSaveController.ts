@@ -1485,11 +1485,14 @@ export class AutoSaveController {
     // Same NATIVE dialog as the Cmd+Q path: OK = discard & close, Cancel / Esc =
     // keep editing (window stays open).
     //
-    // Obsidian shows a full-screen "Saving…" overlay (div.progress-bar-container)
-    // before it awaits this task, which would sit behind the dialog. Hide it via a
-    // body class (rule in styles.css) while the user decides. confirm() freezes
-    // the renderer, so the hide must actually PAINT first — two animation frames
-    // guarantee a paint before we block.
+    // Obsidian shows a full-screen "Saving…" overlay before it awaits this task,
+    // which would sit behind the dialog. Its progress bar show() prepends
+    // div.progress-bar-container AND adds body.in-progress (which un-hides the
+    // frameless titlebar on macOS). Hide BOTH via the asc-hide-saving-overlay body
+    // class (rules in styles.css) while the user decides — a body class is immune
+    // to the timing race where Obsidian re-adds in-progress a frame after we'd
+    // remove it. confirm() freezes the renderer, so the hide must actually PAINT
+    // first — two animation frames guarantee a paint before we block.
     const body = activeDocument.body;
     body.addClass("asc-hide-saving-overlay");
     const confirmWindow = isWindowWithConfirm(activeWindow) ? activeWindow : window;
@@ -1505,6 +1508,13 @@ export class AutoSaveController {
 
   private removeOrphanedSavingOverlay(): void {
     activeDocument.querySelectorAll(".progress-bar-container").forEach((element) => element.remove());
+    // Obsidian's progress bar show() both prepends .progress-bar-container AND adds
+    // body.in-progress; hide() removes both. When the user picks "keep editing" the
+    // window stays open, so Obsidian never calls hide() and the class leaks. On a
+    // frameless macOS window, body.is-frameless.in-progress un-hides the titlebar
+    // (Obsidian app.css), so the "Obsidian — vault" bar appears. Mirror hide() by
+    // dropping the class too, otherwise it stays stuck after an X-button cancel.
+    activeDocument.body.removeClass("in-progress");
   }
 
   private captureObsidianQuitHook(): void {

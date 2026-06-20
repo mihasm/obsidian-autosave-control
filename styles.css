@@ -21,3 +21,20 @@
 body.asc-hide-saving-overlay .progress-bar-container {
   display: none;
 }
+
+/*
+ * The same progress state also un-hides Obsidian's window titlebar on a
+ * frameless macOS window (`body.is-frameless.in-progress` un-collapses
+ * `.titlebar` and adds top padding — Obsidian app.css). Normally the full-screen
+ * overlay covers it, but we hide that overlay to show our dialog, so the
+ * "Untitled — Obsidian" titlebar would peek through. Keep it collapsed while the
+ * dialog is up. These selectors match Obsidian's own specificity and, loading
+ * after app.css, win on source order — no `!important` needed.
+ */
+body.asc-hide-saving-overlay.is-frameless .titlebar {
+  display: none;
+}
+
+body.asc-hide-saving-overlay.is-frameless {
+  padding-top: 0;
+}
