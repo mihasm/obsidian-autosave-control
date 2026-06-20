@@ -13,6 +13,7 @@ type PendingSaveEntry = {
 
 export class PendingSaveQueue {
   private readonly pendingSavesByPath = new Map<string, PendingSaveEntry>();
+  private readonly flushingPaths = new Set<string>();
 
   constructor(
     private readonly app: App,
@@ -156,41 +157,59 @@ export class PendingSaveQueue {
       return;
     }
 
+    // Re-entrancy guard: the auto-save timer and an unload/quit flush can race on
+    // the same path. The entry now survives until the write resolves, so without
+    // this guard both callers would pass the check above and write twice.
+    if (this.flushingPaths.has(filePath)) {
+      return;
+    }
+
+    this.refreshLatestData(filePath);
+
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) {
+      // Can't resolve the file (e.g. mid-rename) — leave it queued as pending
+      // rather than reporting it saved. A later edit/flush will retry.
+      return;
+    }
+
+    this.flushingPaths.add(filePath);
+    try {
+      // Write FIRST. Only retire the entry once the bytes actually land, so the
+      // status indicator never reports "saved" while changes are still pending.
+      const attachedViewFilePath = pendingSave.view.file?.path;
+      if (!this.shouldWriteDirectlyToVault() && attachedViewFilePath === filePath) {
+        await originalSave.call(pendingSave.view);
+      } else {
+        const fileSystemAdapter = this.app.vault.adapter;
+        if (fileSystemAdapter instanceof FileSystemAdapter) {
+          await fileSystemAdapter.write(filePath, pendingSave.latestData);
+          dlog("Pending save flushed via filesystem", filePath);
+        } else {
+          await this.app.vault.modify(file, pendingSave.latestData);
+          dlog("Pending save flushed", filePath);
+        }
+      }
+    } catch (error) {
+      // Write failed — keep the entry pending so the indicator stays truthful and
+      // a later edit/flush retries. Do not delete or emit "saved".
+      dlog("Pending save flush failed", filePath, error);
+      return;
+    } finally {
+      this.flushingPaths.delete(filePath);
+    }
+
+    // Write succeeded — now retire the entry and report "all saved".
     if (pendingSave.timeoutId !== null) {
       window.clearTimeout(pendingSave.timeoutId);
     }
     if (pendingSave.ramRefreshIntervalId !== null) {
       window.clearInterval(pendingSave.ramRefreshIntervalId);
     }
-
-    this.refreshLatestData(filePath);
     this.pendingSavesByPath.delete(filePath);
     this.emitPendingSaveCount();
 
-    const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof TFile)) {
-      return;
-    }
-
-    const attachedViewFilePath = pendingSave.view.file?.path;
-    if (!this.shouldWriteDirectlyToVault() && attachedViewFilePath === filePath) {
-      await originalSave.call(pendingSave.view);
-      await this.onFlushComplete?.(filePath);
-      return;
-    }
-
-    const fileSystemAdapter = this.app.vault.adapter;
-    if (fileSystemAdapter instanceof FileSystemAdapter) {
-      await fileSystemAdapter.write(filePath, pendingSave.latestData);
-      dlog("Pending save flushed via filesystem", filePath);
-      await this.onFlushComplete?.(filePath);
-      return;
-    }
-
-    await this.app.vault.modify(file, pendingSave.latestData);
     await this.onFlushComplete?.(filePath);
-
-    dlog("Pending save flushed", filePath);
   }
 
   async flushAll() {
