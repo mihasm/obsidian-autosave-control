@@ -120,6 +120,63 @@ describe("Multi-vault windows (issues #28/#29)", () => {
     }
   });
 
+  it("#28: app-quit prompts every vault and only the last to answer exits the app", async () => {
+    // Manual (autosave-off) mode in BOTH vaults, each with an unsaved change.
+    const firstNote = "multi-vault/quit-first.md";
+    const secondNote = "multi-vault/quit-second.md";
+    const firstLogPath = path.join(os.tmpdir(), `asc-appquit-log-first-${secondWindowHandle}.txt`);
+    const secondLogPath = path.join(os.tmpdir(), `asc-appquit-log-second-${secondWindowHandle}.txt`);
+    fs.writeFileSync(firstLogPath, "");
+    fs.writeFileSync(secondLogPath, "");
+
+    try {
+      await MultiVaultApp.switchTo(firstWindowHandle);
+      await ObsidianApp.setPluginSettings({ disableAutoSave: true, saveDelaySeconds: LONG_SAVE_DELAY_SECONDS });
+      await ObsidianApp.createAndOpenNote(firstNote);
+      await ObsidianApp.typeText("unsaved edit in the first vault");
+      await browser.waitUntil(
+        async () => (await ObsidianApp.getPendingStatusCount()) > 0,
+        { timeout: 10000, timeoutMsg: "First vault never registered a pending change." },
+      );
+      await MultiVaultApp.installFileLoggedQuitSpyInCurrentWindow(firstLogPath);
+
+      await MultiVaultApp.switchTo(secondWindowHandle);
+      await ObsidianApp.setPluginSettings({ disableAutoSave: true, saveDelaySeconds: LONG_SAVE_DELAY_SECONDS });
+      await ObsidianApp.createAndOpenNote(secondNote);
+      await ObsidianApp.typeText("unsaved edit in the second vault");
+      await browser.waitUntil(
+        async () => (await ObsidianApp.getPendingStatusCount()) > 0,
+        { timeout: 10000, timeoutMsg: "Second vault never registered a pending change." },
+      );
+      await MultiVaultApp.installFileLoggedQuitSpyInCurrentWindow(secondLogPath);
+
+      // Record—rather than execute—any global app exit, so a non-last vault can
+      // never tear down the whole app.
+
+      // First vault answers its quit prompt (discard). It is NOT the last vault to
+      // answer, so it must record its decision and NOT exit the app — the second
+      // vault is still open and unprompted (the original #28 hard-kill defect).
+      // resetCoordination clears any leaked round, as Electron's before-quit would.
+      await MultiVaultApp.switchTo(firstWindowHandle);
+      await MultiVaultApp.simulateAppQuitInCurrentWindow({ markShortcutIntent: false, resetCoordination: true });
+      await expect(fs.readFileSync(firstLogPath, "utf8")).not.toContain("app.exit");
+      await expect(fs.readFileSync(firstLogPath, "utf8")).not.toContain("app.quit");
+
+      // Both vault windows are still alive; the second vault still gets to prompt.
+      await expect(await MultiVaultApp.getElectronWindowCount()).toBe(2);
+
+      // Second vault answers (discard). It is now the LAST open vault still to
+      // answer, so it completes the set and MUST exit the whole app — the bug the
+      // user hit was the app lingering after both vaults answered.
+      await MultiVaultApp.switchTo(secondWindowHandle);
+      await MultiVaultApp.simulateAppQuitInCurrentWindow({ markShortcutIntent: false });
+      await expect(fs.readFileSync(secondLogPath, "utf8")).toContain("app.exit");
+    } finally {
+      fs.rmSync(firstLogPath, { force: true });
+      fs.rmSync(secondLogPath, { force: true });
+    }
+  });
+
   it("#29: REALLY closing one window (no pending changes) must not quit the whole app", async () => {
     // This mirrors the user-reported scenario: with several vaults open, click
     // the red close button on one window. Closing a window fires that window's

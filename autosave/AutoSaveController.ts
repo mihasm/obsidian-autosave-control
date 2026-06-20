@@ -36,6 +36,12 @@ type ElectronBrowserWindow = {
   removeListener: (event: "close", listener: ElectronCloseListener) => void;
   close?: () => void;
   destroy?: () => void;
+  focus?: () => void;
+  show?: () => void;
+  id?: number;
+};
+type ElectronBrowserWindowStatic = {
+  getAllWindows?: () => ElectronBrowserWindow[];
 };
 type ElectronAppQuitListener = () => void;
 type ElectronApp = {
@@ -48,10 +54,25 @@ type ElectronModule = {
   remote?: {
     app?: ElectronApp;
     getCurrentWindow?: () => ElectronBrowserWindow | null;
+    BrowserWindow?: ElectronBrowserWindowStatic;
+    process?: { pid?: number };
   };
 };
 type ElectronRequireHost = Window & {
   require?: (module: "electron") => ElectronModule;
+};
+// Minimal Node built-ins available in the Obsidian (Electron) renderer; used to
+// coordinate a multi-window app quit across separate vault renderers via a temp
+// file (issue #28).
+type NodeFsModule = {
+  readFileSync: (path: string, encoding: string) => string;
+  writeFileSync: (path: string, data: string) => void;
+  rmSync?: (path: string, options: { force: boolean }) => void;
+};
+type NodePathModule = { join: (...parts: string[]) => string };
+type NodeOsModule = { tmpdir: () => string };
+type NodeRequireHost = Window & {
+  require?: (module: string) => unknown;
 };
 
 function callWithArgs<TThis, TArgs extends unknown[], TResult>(
@@ -290,7 +311,17 @@ export class AutoSaveController {
             const decision = await this.askManualCloseDecision();
             if (decision === "discard") {
               this.discardAllPendingChanges();
-              // Task resolves -> Obsidian closes the window / quits on its own.
+              await this.workspaceLayoutSaveController.flush();
+              // On a real app quit (Cmd+Q / menu Quit) a background vault's close
+              // was preventDefault'd to give its prompt unlimited time, which
+              // cancels Electron's app quit; once every vault has answered nothing
+              // would re-quit, so the app would just sit with all windows closed
+              // (issue #28). Record this vault's decision; the last vault to
+              // answer completes the set and exits the whole app.
+              if (this.appIsQuitting) {
+                this.finalizeQuitFromThisWindow();
+              }
+              // Otherwise: task resolves -> Obsidian closes this window / quits.
             } else {
               // Cancel / Esc -> keep editing. Obsidian calls window.close() once
               // this task resolves, so we must NOT resolve it — hang it so the
@@ -318,9 +349,14 @@ export class AutoSaveController {
             }
             await this.workspaceLayoutSaveController.flush();
             this.clearQuitShortcutIntent();
+            // A real app quit (Cmd+Q / menu Quit). With multiple vaults open,
+            // each vault is a separate window in the SAME Electron process, and a
+            // global app.exit() from THIS window would hard-kill every other vault
+            // before it could prompt and flush (issue #28). Record this vault's
+            // decision instead; the last vault to settle completes the set and
+            // exits the whole app (single vault exits immediately).
             if (this.appIsQuitting) {
-              this.isUnloading = true;
-              this.exitApplicationAfterFlush();
+              this.finalizeQuitFromThisWindow();
             }
           });
           return;
@@ -1313,6 +1349,11 @@ export class AutoSaveController {
 
     const listener: ElectronAppQuitListener = () => {
       this.appIsQuitting = true;
+      // Start a fresh multi-window quit-coordination round (issue #28). Each
+      // vault renderer clears the shared file here, at "before-quit" time — long
+      // before any per-window quit task records its decision — so a stale set
+      // from a previously cancelled quit can never trigger a premature exit.
+      this.resetQuitCoordination();
     };
     app.on("before-quit", listener);
     this.electronApp = app;
@@ -1374,6 +1415,132 @@ export class AutoSaveController {
     }
 
     return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Multi-window app-quit coordination (issue #28)
+  //
+  // Each open vault is a separate renderer in the SAME Electron process. On a
+  // real app quit Obsidian runs every window's "quit" task and only closes the
+  // windows once they have all settled, so at task time getAllWindows() always
+  // still reports every window — no single window can tell whether it is "last".
+  // We also cannot quit from a main-process hook (e.g. window-all-closed): by the
+  // time it fires every renderer is gone, so no plugin code is left to run.
+  //
+  // Instead the windows agree through a temp file (keyed by the shared main pid):
+  // each records its window id once its quit decision is made, and the window
+  // that completes the set — i.e. observes every currently-open window as done —
+  // exits the whole app while it is still alive. If any vault chooses "keep
+  // editing" it never records itself, so the set never completes and the app
+  // stays open, which is exactly the cancel-the-quit behaviour we want.
+  // ---------------------------------------------------------------------------
+  private getElectronModule(): ElectronModule | undefined {
+    return (window as ElectronRequireHost).require?.("electron");
+  }
+
+  private getNodeModule<T>(moduleName: string): T | undefined {
+    try {
+      return (window as NodeRequireHost).require?.(moduleName) as T | undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private getQuitCoordinationFilePath(): string | null {
+    const pathModule = this.getNodeModule<NodePathModule>("path");
+    const osModule = this.getNodeModule<NodeOsModule>("os");
+    if (!pathModule || !osModule) {
+      return null;
+    }
+
+    const mainProcessPid = this.getElectronModule()?.remote?.process?.pid ?? "unknown";
+    return pathModule.join(osModule.tmpdir(), `asc-quit-coordination-${mainProcessPid}.json`);
+  }
+
+  private resetQuitCoordination(): void {
+    const filePath = this.getQuitCoordinationFilePath();
+    const fsModule = this.getNodeModule<NodeFsModule>("fs");
+    if (!filePath || !fsModule) {
+      return;
+    }
+
+    try {
+      fsModule.writeFileSync(filePath, JSON.stringify({ done: [] }));
+    } catch {
+      // best-effort: a missing coordination file just falls back to a fresh set
+    }
+  }
+
+  // Record this window's quit decision and, if every currently-open window has
+  // now recorded one, exit the whole application. Falls back to a direct exit
+  // when window coordination is unavailable (single window / non-Electron),
+  // preserving the original single-vault quit behaviour.
+  private finalizeQuitFromThisWindow(): void {
+    const electron = this.getElectronModule();
+    const myWindowId = electron?.remote?.getCurrentWindow?.()?.id;
+    const openWindows = electron?.remote?.BrowserWindow?.getAllWindows?.();
+    const filePath = this.getQuitCoordinationFilePath();
+    const fsModule = this.getNodeModule<NodeFsModule>("fs");
+
+    const openWindowIds = Array.isArray(openWindows)
+      ? openWindows.map((openWindow) => openWindow.id).filter((id): id is number => typeof id === "number")
+      : [];
+
+    if (openWindowIds.length <= 1 || typeof myWindowId !== "number" || !filePath || !fsModule) {
+      this.isUnloading = true;
+      this.exitApplicationAfterFlush();
+      return;
+    }
+
+    const doneWindowIds = this.readQuitCoordinationDoneIds(fsModule, filePath);
+    if (!doneWindowIds.includes(myWindowId)) {
+      doneWindowIds.push(myWindowId);
+    }
+    try {
+      fsModule.writeFileSync(filePath, JSON.stringify({ done: doneWindowIds }));
+    } catch {
+      // best-effort
+    }
+
+    const everyOpenWindowIsDone = openWindowIds.every((id) => doneWindowIds.includes(id));
+    if (everyOpenWindowIsDone) {
+      try {
+        fsModule.rmSync?.(filePath, { force: true });
+      } catch {
+        // best-effort cleanup
+      }
+      this.isUnloading = true;
+      this.exitApplicationAfterFlush();
+    }
+    // Otherwise another vault still has to answer; this window's task resolves and
+    // it waits. The last vault to answer completes the set and exits the app.
+  }
+
+  private readQuitCoordinationDoneIds(fsModule: NodeFsModule, filePath: string): number[] {
+    try {
+      const parsed = JSON.parse(fsModule.readFileSync(filePath, "utf8")) as { done?: unknown };
+      if (Array.isArray(parsed.done)) {
+        return parsed.done.filter((id): id is number => typeof id === "number");
+      }
+    } catch {
+      // missing or corrupt -> start a fresh set
+    }
+
+    return [];
+  }
+
+  // Bring this renderer's window to the front before showing a blocking dialog.
+  // During an app quit a background vault window cannot surface a native
+  // confirm() unless it is focused first, so without this its prompt is invisible
+  // even though its quit task is running (issue #28).
+  private focusCurrentWindow(): void {
+    const browserWindow = this.getElectronBrowserWindow(window);
+    try {
+      browserWindow?.show?.();
+      browserWindow?.focus?.();
+    } catch {
+      // best-effort: focusing is only to make the prompt visible
+    }
   }
 
   private getElectronBrowserWindow(targetWindow: Window): ElectronBrowserWindow | null {
@@ -1493,6 +1660,12 @@ export class AutoSaveController {
     // to the timing race where Obsidian re-adds in-progress a frame after we'd
     // remove it. confirm() freezes the renderer, so the hide must actually PAINT
     // first — two animation frames guarantee a paint before we block.
+    //
+    // Multi-vault (issue #28): during an app quit this task can run in a vault
+    // window that is not the focused one, where a native confirm would never be
+    // shown. Bring our own window forward first so the prompt is actually visible.
+    this.focusCurrentWindow();
+
     const body = activeDocument.body;
     body.addClass("asc-hide-saving-overlay");
     const confirmWindow = isWindowWithConfirm(activeWindow) ? activeWindow : window;

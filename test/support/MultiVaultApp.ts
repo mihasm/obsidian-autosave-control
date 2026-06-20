@@ -228,6 +228,57 @@ class MultiVaultApp {
     });
   }
 
+  /**
+   * Simulate a real application quit (Cmd+Q / menu Quit) reaching THIS window,
+   * the way Electron's "before-quit" + the focused window's quit shortcut do,
+   * then run the plugin's workspace "quit" tasks to completion.
+   *
+   * With markShortcutIntent (default), mirrors the FOCUSED vault under Cmd+Q:
+   * app is quitting AND this window marked a quit-shortcut intent. With it false,
+   * mirrors a BACKGROUND vault (or any vault under a menu Quit): no shortcut
+   * intent, so the plugin runs its manual discard prompt. window.confirm is
+   * stubbed to "discard" so the prompt never blocks the driver.
+   *
+   * resetCoordination clears the cross-window quit-coordination file first, the
+   * way Electron's real "before-quit" does for every window; pass it on the FIRST
+   * window simulated in a scenario so a previous round's recorded ids cannot leak
+   * in. Returns once every quit task settled.
+   */
+  async simulateAppQuitInCurrentWindow(
+    options: { markShortcutIntent?: boolean; resetCoordination?: boolean } = {},
+  ): Promise<void> {
+    const markShortcutIntent = options.markShortcutIntent ?? true;
+    const resetCoordination = options.resetCoordination ?? false;
+    await browser.execute(async (shouldMarkShortcutIntent: boolean, shouldResetCoordination: boolean) => {
+      const w = window as typeof window & {
+        app: any;
+        confirm: (message?: string) => boolean;
+      };
+      w.confirm = () => true;
+
+      const controller = w.app?.plugins?.plugins?.["autosave-control"]?.autosaveController;
+      if (!controller) {
+        throw new Error("Autosave controller is not available in this window.");
+      }
+
+      // Stand in for Electron "before-quit" (app is quitting) and, for the
+      // focused vault, the Cmd+Q keydown (quit-shortcut intent marked).
+      controller.appIsQuitting = true;
+      controller.quitShortcutIntentTimestampMs = shouldMarkShortcutIntent ? Date.now() : 0;
+      if (shouldResetCoordination) {
+        controller.resetQuitCoordination();
+      }
+
+      // The "quit" event may reach other listeners too; they hand add() either a
+      // function (the plugin) or a Promise (Obsidian core). Settle both shapes.
+      const collectedTasks: unknown[] = [];
+      w.app.workspace.trigger("quit", { add: (task: unknown) => collectedTasks.push(task) });
+      for (const task of collectedTasks) {
+        await (typeof task === "function" ? task() : task);
+      }
+    }, markShortcutIntent, resetCoordination);
+  }
+
   /** Best-effort cleanup of a second vault directory created during a test. */
   removeVaultDir(vaultPath: string): void {
     try {
