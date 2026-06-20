@@ -126,6 +126,9 @@ export class AutoSaveController {
   private appIsQuitting = false;
   private electronApp: ElectronApp | null = null;
   private electronAppQuitListener: ElectronAppQuitListener | null = null;
+  // Obsidian's own one-shot window.onbeforeunload quit hook, captured so we can
+  // re-arm it after the user picks "keep editing" (issue #26 close dialog).
+  private obsidianOnBeforeUnload: ((event: BeforeUnloadEvent) => unknown) | null = null;
 
   constructor(private readonly app: App, private readonly getSettings: () => AutoSaveControlSettings) {
     this.editActivityTracker = new EditActivityTracker(
@@ -261,33 +264,67 @@ export class AutoSaveController {
     if (!Platform.isMobileApp) {
       this.registerAppQuitObserver();
 
+      // Capture Obsidian's own window.onbeforeunload quit hook (set during app
+      // startup). It is one-shot — it nulls itself when a close begins — so we
+      // re-install it after the user chooses "keep editing".
+      if (typeof window.onbeforeunload === "function") {
+        this.obsidianOnBeforeUnload = window.onbeforeunload as (event: BeforeUnloadEvent) => unknown;
+      }
+
       this.workspaceQuitEventRef = this.app.workspace.on("quit", (tasks: Tasks) => {
         this.pendingSaveQueue.refreshAllLatestData();
-        const quitWasRequestedWithShortcut = this.wasQuitShortcutIntentRecentlyMarked();
+        const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
+        const manual = this.getSettings().disableAutoSave;
+        const hasPending = this.pendingSaveQueue.hasAny();
 
-        tasks.add(async () => {
-          const hasPendingSaves = this.pendingSaveQueue.hasAny();
-          if (
-            hasPendingSaves
-            && (!quitWasRequestedWithShortcut || !this.getSettings().disableAutoSave)
-          ) {
-            await this.pendingSaveQueue.flushAll();
-          }
+        // MANUAL mode (issue #26): plain window close (the X button, not the
+        // Cmd+Q/menu quit shortcut) with unsaved changes. Prompt exactly like the
+        // Cmd+Q dialog — OK = discard & close, Cancel/Esc = keep editing. Obsidian
+        // awaits this task before calling window.close(), and the close listener
+        // disabled its 3s force-destroy, so the prompt holds the close as long as
+        // needed.
+        if (manual && !shortcut && hasPending) {
+          tasks.add(async () => {
+            const decision = await this.askManualCloseDecision();
+            if (decision === "discard") {
+              this.discardAllPendingChanges();
+              // Task resolves -> Obsidian closes the window / quits on its own.
+            } else {
+              // Cancel / Esc -> keep editing. Obsidian calls window.close() once
+              // this task resolves, so we must NOT resolve it — hang it so the
+              // window stays open. Remove the orphaned "Saving…" overlay and
+              // re-arm Obsidian's one-shot quit hook for the next close.
+              this.removeOrphanedSavingOverlay();
+              this.reArmObsidianQuitHook();
+              await new Promise<void>(() => { /* never resolves: window stays open */ });
+            }
+          });
+          return;
+        }
 
-          await this.workspaceLayoutSaveController.flush();
-          this.clearQuitShortcutIntent();
+        // Only add a task when there is real work to do — flushing pending saves
+        // (auto-save mode / shortcut quit), flushing a deferred workspace layout
+        // write, or exiting on a real app quit. With nothing to do we add no task,
+        // so Obsidian closes the window immediately (no "Saving…" overlay, no 3s
+        // wait).
+        const needsFlush = hasPending && (!shortcut || !manual);
+        const needsLayoutFlush = this.workspaceLayoutSaveController.hasPending();
+        if (needsFlush || needsLayoutFlush || this.appIsQuitting) {
+          tasks.add(async () => {
+            if (needsFlush) {
+              await this.pendingSaveQueue.flushAll();
+            }
+            await this.workspaceLayoutSaveController.flush();
+            this.clearQuitShortcutIntent();
+            if (this.appIsQuitting) {
+              this.isUnloading = true;
+              this.exitApplicationAfterFlush();
+            }
+          });
+          return;
+        }
 
-          // The workspace "quit" event fires per window, both when the whole
-          // application is quitting AND when a single window is being closed
-          // (e.g. one of several open vaults). Only force an explicit exit when
-          // Electron told us the whole app is quitting; forcing it on a single
-          // window close would tear down the app and every other vault window
-          // (issue #29). Obsidian closes the lone window on its own.
-          if (this.appIsQuitting) {
-            this.isUnloading = true;
-            this.exitApplicationAfterFlush();
-          }
-        });
+        this.clearQuitShortcutIntent();
       });
     }
 
@@ -772,7 +809,17 @@ export class AutoSaveController {
 
       this.pendingSaveQueue.refreshAllLatestData();
 
-      if (!this.wasQuitShortcutIntentRecentlyMarked() && this.pendingSaveQueue.hasAny()) {
+      const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
+      const hasPending = this.pendingSaveQueue.hasAny();
+      const manual = this.getSettings().disableAutoSave;
+
+      if (!shortcut && hasPending) {
+        if (manual) {
+          // Manual mode (issue #26) is handled by the awaited workspace 'quit'
+          // task. Do NOT mark isUnloading here: if the user picks "keep editing"
+          // the window stays open and the next close must still be intercepted.
+          return;
+        }
         event.preventDefault();
         void this.handleWindowCloseRequest(targetWindow);
         return;
@@ -796,9 +843,25 @@ export class AutoSaveController {
       }
 
       this.pendingSaveQueue.refreshAllLatestData();
-      if (!this.wasQuitShortcutIntentRecentlyMarked() && this.pendingSaveQueue.hasAny()) {
+      const shortcut = this.wasQuitShortcutIntentRecentlyMarked();
+      const hasPending = this.pendingSaveQueue.hasAny();
+      const manual = this.getSettings().disableAutoSave;
+
+      if (!shortcut && hasPending) {
+        // CRITICAL (issue #26): Obsidian's main process force-destroys the window
+        // 3s after the close event UNLESS the close event's defaultPrevented is
+        // set ( obsidian.asar main.js: setTimeout(() => !h.defaultPrevented &&
+        // !win.isDestroyed() && win.destroy(), 3000) ). Calling preventDefault
+        // here disables that 3s watchdog, giving the manual-mode dialog (awaited
+        // by Obsidian's "quit" task) unlimited time. The async @electron/remote
+        // forwarding lands well within the 3s, so defaultPrevented is set in time.
         event.preventDefault();
-        void this.handleWindowCloseRequest(targetWindow);
+
+        if (!manual) {
+          // AUTO-save mode: silently flush via the async re-close path.
+          void this.handleWindowCloseRequest(targetWindow);
+        }
+        // MANUAL mode: the workspace 'quit' task prompts and Obsidian awaits it.
       }
     };
 
@@ -1337,7 +1400,8 @@ export class AutoSaveController {
       // open, each vault is a separate window in the same Electron process, and
       // quitting here would tear them all down (issue #29).
       this.bypassNextWindowCloseInterception = true;
-      if (!this.closeWindowAfterFlush(targetWindow)) {
+      const reclosed = this.closeWindowAfterFlush(targetWindow);
+      if (!reclosed) {
         this.bypassNextWindowCloseInterception = false;
       }
     } finally {
@@ -1346,7 +1410,11 @@ export class AutoSaveController {
   }
 
   private closeWindowAfterFlush(targetWindow: Window): boolean {
-    const browserWindow = this.getElectronBrowserWindow(targetWindow);
+    // Prefer the BrowserWindow reference captured when the close listener was
+    // attached: after a blocking confirm dialog, remote.getCurrentWindow() can
+    // return null, but the stored reference stays valid (issue #26).
+    const browserWindow = this.electronCloseListenersByWindow.get(targetWindow)?.browserWindow
+      ?? this.getElectronBrowserWindow(targetWindow);
 
     try {
       if (typeof browserWindow?.close === "function") {
@@ -1389,6 +1457,50 @@ export class AutoSaveController {
 
       this.pendingSaveQueue.clear(filePath);
       this.captureCurrentViewData(filePath, textFileView);
+    }
+  }
+
+  // Ask the user (manual mode, issue #26) whether to save before closing, AFTER
+  // beforeunload has reliably blocked the close. Runs in a deferred task so that
+  // window.confirm is not suppressed (it is, while a beforeunload handler is on
+  // the call stack). The user's choice then re-issues the close on the still-open
+  // window, which closes it and quits the app if it was the last one.
+  // Ask the user (manual mode, issue #26) whether to save before closing, as a
+  // NON-BLOCKING Obsidian Modal that resolves a promise. This is awaited from the
+  // workspace "quit" task, the one hook Obsidian genuinely blocks on (it is what
+  // the "Saving…" screen represents), so the window stays open until the user
+  // chooses. window.confirm is unusable here: it freezes the renderer, which
+  // Electron force-closes after ~3s. Esc / click-away defaults to "save" so a
+  // dismissed dialog can never lose data.
+  private askManualCloseDecision(): Promise<"discard" | "cancel"> {
+    // Same NATIVE dialog as the Cmd+Q path: OK = discard & close, Cancel / Esc =
+    // keep editing (window stays open).
+    //
+    // Obsidian shows a full-screen "Saving…" overlay (div.progress-bar-container)
+    // before it awaits this task, which would sit behind the dialog. Hide it via a
+    // body class (rule in styles.css) while the user decides. confirm() freezes
+    // the renderer, so the hide must actually PAINT first — two animation frames
+    // guarantee a paint before we block.
+    const body = activeDocument.body;
+    body.addClass("asc-hide-saving-overlay");
+    const confirmWindow = isWindowWithConfirm(activeWindow) ? activeWindow : window;
+
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        const proceed = confirmWindow.confirm("You have unsaved changes. Close and discard those changes?");
+        body.removeClass("asc-hide-saving-overlay");
+        resolve(proceed ? "discard" : "cancel");
+      }));
+    });
+  }
+
+  private removeOrphanedSavingOverlay(): void {
+    activeDocument.querySelectorAll(".progress-bar-container").forEach((element) => element.remove());
+  }
+
+  private reArmObsidianQuitHook(): void {
+    if (this.obsidianOnBeforeUnload && !window.onbeforeunload) {
+      window.onbeforeunload = this.obsidianOnBeforeUnload;
     }
   }
 
