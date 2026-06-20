@@ -13,7 +13,11 @@
 /*
  * While the manual-mode "close & discard?" dialog is shown, hide Obsidian's
  * full-screen "Saving…" progress overlay so it is not visible behind the dialog.
+ *
+ * Obsidian styles the overlay with `.progress-bar-container { display: flex }`
+ * (one class). This selector (two classes + an element) has higher specificity,
+ * so it wins without needing `!important`.
  */
 body.asc-hide-saving-overlay .progress-bar-container {
-  display: none !important;
+  display: none;
 }

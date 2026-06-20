@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"lint": "eslint main.ts debug.ts autosave ui settings",
+		"lint": "eslint main.ts debug.ts autosave ui settings styles.css",
 		"wdio": "node ./scripts/run-wdio.mjs",
 		"wdio:desktop": "node ./scripts/run-wdio.mjs --desktop-only",
 		"wdio:android": "node ./scripts/run-android-wdio.mjs",
@@ -31,6 +31,7 @@
 	"author": "Miha Smrekar",
 	"license": "MIT",
 	"devDependencies": {
+		"@eslint/css": "^1.3.0",
 		"@eslint/js": "^9.39.4",
 		"@eslint/json": "^0.14.0",
 		"@types/mocha": "^10.0.10",
