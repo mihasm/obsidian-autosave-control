@@ -1389,6 +1389,34 @@ class ObsidianApp {
       window.dispatchEvent(event);
     });
   }
+
+  // Fire Obsidian's workspace "quit" event with a stub task collector, the way
+  // Obsidian's onbeforeunload quit hook does on a window close. Tasks are run
+  // fire-and-forget so a "keep editing" task that intentionally never resolves
+  // does not block the test.
+  async triggerWorkspaceQuit() {
+    await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      const collected: Array<() => unknown> = [];
+      const mockTasks = {
+        add(fn: () => unknown) {
+          collected.push(fn);
+          try {
+            void Promise.resolve(fn());
+          } catch {
+            // ignore — a "keep editing" task never resolves
+          }
+        },
+        isEmpty() {
+          return collected.length === 0;
+        },
+        promise() {
+          return Promise.resolve();
+        },
+      };
+      app.workspace.trigger("quit", mockTasks);
+    });
+  }
 }
 
 export default new ObsidianApp();

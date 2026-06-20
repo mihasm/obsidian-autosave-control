@@ -904,55 +904,68 @@ describe("Autosave Control manual scenarios", () => {
     await expect(layoutSaveMethods.requestSaveLayout === "function" || layoutSaveMethods.saveLayout === "function").toBe(true);
   });
 
-  it("flushes pending note changes when closing Obsidian without the quit shortcut in manual-only mode", async () => {
+  it("prevents the default window close in manual-only mode so the discard prompt can run", async () => {
     const notePath = "settings/quit-prompt.md";
 
     await enableManualOnlyMode();
     await ObsidianApp.createAndOpenNote(notePath);
     await ObsidianApp.typeText("unsaved");
     await ObsidianApp.waitForPendingStatus();
-    await browser.execute(() => {
-      const app = (window as typeof window & { app: any }).app;
-      const plugin = app?.plugins?.plugins?.["autosave-control"] as {
-        autosaveController?: { closeWindowAfterFlush?: (targetWindow: Window) => boolean };
-      } | undefined;
-      const controller = plugin?.autosaveController as {
-        closeWindowAfterFlush?: (targetWindow: Window) => boolean;
-      } | undefined;
-      const targetWindow = window as typeof window & {
-        __ascOriginalCloseWindowAfterFlush?: (targetWindow: Window) => boolean;
-      };
-      if (!controller?.closeWindowAfterFlush) {
-        throw new Error("Autosave Control window close handler is not available.");
-      }
 
-      // Stub the actual window close so the flush still runs but the test
-      // window stays open and observable.
-      targetWindow.__ascOriginalCloseWindowAfterFlush = controller.closeWindowAfterFlush;
-      controller.closeWindowAfterFlush = () => true;
-    });
+    // The electron 'close' listener must preventDefault so Obsidian does not
+    // force-destroy the window after 3s, leaving the quit prompt time to run.
+    const windowClose = await ObsidianApp.dispatchElectronWindowClose();
+    await expect(windowClose.defaultPrevented).toBe(true);
+  });
+
+  it("prompts to discard pending changes on window close in manual-only mode and discards on OK", async () => {
+    const notePath = "settings/quit-prompt-ok.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath);
+    await ObsidianApp.typeText("unsaved");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(true); // OK = discard & close
 
     try {
-      const windowClose = await ObsidianApp.dispatchElectronWindowClose();
-      await expect(windowClose.defaultPrevented).toBe(true);
-      await expectSavedAfterDelay(notePath, "unsaved", 4000);
-    } finally {
-      await browser.execute(() => {
-        const app = (window as typeof window & { app: any }).app;
-        const plugin = app?.plugins?.plugins?.["autosave-control"] as {
-          autosaveController?: { closeWindowAfterFlush?: (targetWindow: Window) => boolean };
-        } | undefined;
-        const controller = plugin?.autosaveController as {
-          closeWindowAfterFlush?: (targetWindow: Window) => boolean;
-        } | undefined;
-        const targetWindow = window as typeof window & {
-          __ascOriginalCloseWindowAfterFlush?: (targetWindow: Window) => boolean;
-        };
-        if (controller && targetWindow.__ascOriginalCloseWindowAfterFlush) {
-          controller.closeWindowAfterFlush = targetWindow.__ascOriginalCloseWindowAfterFlush;
-        }
-        delete targetWindow.__ascOriginalCloseWindowAfterFlush;
+      await ObsidianApp.triggerWorkspaceQuit();
+      await browser.waitUntil(async () => (await ObsidianApp.getConfirmMessages()).length > 0, {
+        timeout: 5000,
+        timeoutMsg: "Window-close discard prompt was not shown.",
       });
+
+      const messages = await ObsidianApp.getConfirmMessages();
+      await expect(messages[0]).toContain("discard");
+      // OK = discard: the pending change is dropped, nothing is written to disk.
+      await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
+    } finally {
+      await ObsidianApp.restoreConfirm();
+    }
+  });
+
+  it("keeps Obsidian open and unsaved when the window-close discard prompt is cancelled in manual-only mode", async () => {
+    const notePath = "settings/quit-prompt-cancel.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath);
+    await ObsidianApp.typeText("do not discard");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(false); // Cancel = keep editing
+
+    try {
+      await ObsidianApp.triggerWorkspaceQuit();
+      await browser.waitUntil(async () => (await ObsidianApp.getConfirmMessages()).length > 0, {
+        timeout: 5000,
+        timeoutMsg: "Window-close discard prompt was not shown.",
+      });
+
+      const messages = await ObsidianApp.getConfirmMessages();
+      await expect(messages[0]).toContain("discard");
+      // Cancel keeps the note open and the change unsaved (not written to disk).
+      await expect(await ObsidianApp.getActiveFilePath()).toBe(notePath);
+      await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
+    } finally {
+      await ObsidianApp.restoreConfirm();
     }
   });
 
