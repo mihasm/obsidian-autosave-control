@@ -25,6 +25,9 @@ export default class AutoSaveControlPlugin extends Plugin {
     this.autosaveController.setPendingSaveCountChangeHandler((pendingSaveCount) => {
       this.saveStatusIndicator.setPendingSaveCount(pendingSaveCount);
     });
+    this.saveStatusIndicator.setPendingNoteNamesProvider(
+      () => this.autosaveController.getPendingNoteNames(),
+    );
     this.autosaveController.enable();
 
     this.applyStatusColors();

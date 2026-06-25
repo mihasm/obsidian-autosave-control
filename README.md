@@ -26,7 +26,9 @@ This reduces unnecessary writes and avoids constant file updates.
 - No automatic saving occurs.
 - Files are saved **only** when you manually trigger a save.
 - You must use the **Save File** command (assign a hotkey if needed).
-- Closing a note or quitting Obsidian with unsaved changes will show a warning.
+- Quitting Obsidian or closing its window with unsaved changes shows a warning that lists the affected notes.
+- Switching notes in a tab or closing a note tab does **not** prompt: your unsaved changes are kept in memory and restored when you reopen the note.
+- Hover the status-bar indicator to see the list of notes with unsaved changes.
 
 ## Workspace Layout Saves
 

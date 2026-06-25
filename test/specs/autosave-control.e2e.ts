@@ -548,7 +548,7 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.createAndOpenNote(notePath);
     await ObsidianApp.typeText("x");
     await ObsidianApp.waitForPendingStatus();
-    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
   });
 
   it("changes the status dot back to saved after autosave completes", async () => {
@@ -606,7 +606,7 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.waitForPendingStatus();
 
     await ObsidianApp.waitForVaultFileContent(firstNotePath, "first", 5000);
-    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
     await expectSavedAfterDelay(secondNotePath, "second");
   });
 
@@ -672,51 +672,59 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.readVaultFile(secondNotePath)).toBe(secondNoteContent);
   });
 
-  it("cancels same-leaf note switching in manual-only mode and keeps the unsaved note visible", async () => {
-    const sourceNotePath = "settings/manual-only-switch-cancel-source.md";
-    const targetNotePath = "settings/manual-only-switch-cancel-target.md";
+  it("switches notes in the same tab in manual-only mode without prompting and keeps the source note pending", async () => {
+    const sourceNotePath = "settings/manual-only-switch-keep-source.md";
+    const targetNotePath = "settings/manual-only-switch-keep-target.md";
 
     await enableManualOnlyMode();
     await ObsidianApp.createAndOpenNote(targetNotePath, "saved target");
     await ObsidianApp.createAndOpenNote(sourceNotePath);
-    await ObsidianApp.typeText("keep me visible");
+    await ObsidianApp.typeText("unsaved source edit");
     await ObsidianApp.waitForPendingStatus();
-    await ObsidianApp.installConfirmStub(false);
-
-    await ObsidianApp.requestOpenExistingNote(targetNotePath);
-    const messages = await ObsidianApp.getConfirmMessages();
-
-    await expect(messages[0]).toContain("discard those changes");
-    await expect(await ObsidianApp.getActiveFilePath()).toBe(sourceNotePath);
-    await expect(await ObsidianApp.getActiveEditorContent()).toBe("keep me visible");
-    await expect(await ObsidianApp.readVaultFile(sourceNotePath)).toBe("");
-    await expect(await ObsidianApp.readVaultFile(targetNotePath)).toBe("saved target");
-    await ObsidianApp.restoreConfirm();
-  });
-
-  it("allows same-leaf note switching in manual-only mode after discarding unsaved changes", async () => {
-    const sourceNotePath = "settings/manual-only-switch-discard-source.md";
-    const targetNotePath = "settings/manual-only-switch-discard-target.md";
-
-    await enableManualOnlyMode();
-    await ObsidianApp.createAndOpenNote(targetNotePath, "saved target");
-    await ObsidianApp.createAndOpenNote(sourceNotePath);
-    await ObsidianApp.typeText("discard me");
-    await ObsidianApp.waitForPendingStatus();
+    // A real confirm() would freeze the renderer and hang the test; stubbing it
+    // lets us assert that no prompt is shown and keeps the run alive if the
+    // no-prompt behaviour ever regresses.
     await ObsidianApp.installConfirmStub(true);
 
     await ObsidianApp.openExistingNote(targetNotePath);
-    const messages = await ObsidianApp.getConfirmMessages();
 
-    await expect(messages[0]).toContain("discard those changes");
+    // The switch goes through silently — no discard prompt — and nothing is written.
+    await expect(await ObsidianApp.getConfirmMessages()).toEqual([]);
     await expect(await ObsidianApp.getActiveFilePath()).toBe(targetNotePath);
     await expect(await ObsidianApp.getActiveEditorContent()).toBe("saved target");
     await expect(await ObsidianApp.readVaultFile(sourceNotePath)).toBe("");
     await expect(await ObsidianApp.readVaultFile(targetNotePath)).toBe("saved target");
+    // The source note is still pending and surfaced in the status-bar tooltip.
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
     await ObsidianApp.restoreConfirm();
   });
 
-  it("keeps another dirty tab unsaved when discarding a duplicate tab in manual-only mode", async () => {
+  it("restores the source note's unsaved changes when switching back to it in the same tab in manual-only mode", async () => {
+    const sourceNotePath = "settings/manual-only-switch-restore-source.md";
+    const targetNotePath = "settings/manual-only-switch-restore-target.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(targetNotePath, "saved target");
+    await ObsidianApp.createAndOpenNote(sourceNotePath);
+    await ObsidianApp.typeText("changes to restore");
+    await ObsidianApp.waitForPendingStatus();
+
+    await ObsidianApp.openExistingNote(targetNotePath);
+    await expect(await ObsidianApp.getActiveEditorContent()).toBe("saved target");
+
+    await ObsidianApp.openExistingNote(sourceNotePath);
+
+    // Coming back restores the buffered (still-unsaved) text into the editor.
+    await browser.waitUntil(
+      async () => (await ObsidianApp.getActiveEditorContent()) === "changes to restore",
+      { timeout: 5000, timeoutMsg: "Pending source-note changes were not restored on switch-back." },
+    );
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(sourceNotePath);
+    await expect(await ObsidianApp.readVaultFile(sourceNotePath)).toBe("");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
+  });
+
+  it("keeps the note pending without prompting when closing a duplicate tab in manual-only mode", async () => {
     const notePath = "settings/manual-only-duplicate-tab.md";
 
     await enableManualOnlyMode();
@@ -731,16 +739,48 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.installConfirmStub(true);
 
     await ObsidianApp.closeActiveTab();
-    const messages = await ObsidianApp.getConfirmMessages();
 
-    await expect(messages[0]).toContain("discard those changes");
+    // Closing the duplicate tab no longer prompts; the note stays open and dirty
+    // in the other tab and nothing is written to disk.
+    await expect(await ObsidianApp.getConfirmMessages()).toEqual([]);
     await expect(await ObsidianApp.getActiveFilePath()).toBe(notePath);
     await expect(await ObsidianApp.getActiveEditorContent()).toBe("saved base plus unsaved");
     await expect(await ObsidianApp.readVaultFile(notePath)).toBe("saved base");
-    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
 
     await ObsidianApp.runSaveCommand();
     await expectSavedAfterDelay(notePath, "saved base plus unsaved", 4000);
+    await ObsidianApp.restoreConfirm();
+  });
+
+  it("keeps a closed note's unsaved changes and restores them when it is reopened in manual-only mode", async () => {
+    const anchorNotePath = "settings/manual-only-close-anchor.md";
+    const notePath = "settings/manual-only-close-restore.md";
+
+    await enableManualOnlyMode();
+    // An anchor tab keeps the workspace alive once the dirty tab is closed.
+    await ObsidianApp.createAndOpenNote(anchorNotePath, "anchor");
+    await ObsidianApp.openNoteInNewTab(notePath);
+    await ObsidianApp.typeText("close me but keep my edits");
+    await ObsidianApp.waitForPendingStatus();
+    await ObsidianApp.installConfirmStub(true);
+
+    await ObsidianApp.closeActiveTab();
+
+    // Closing the tab prompts nothing, writes nothing, and keeps the note pending.
+    await expect(await ObsidianApp.getConfirmMessages()).toEqual([]);
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
+
+    await ObsidianApp.openExistingNote(notePath);
+
+    // Reopening the note restores the buffered, still-unsaved text into the editor.
+    await browser.waitUntil(
+      async () => (await ObsidianApp.getActiveEditorContent()) === "close me but keep my edits",
+      { timeout: 5000, timeoutMsg: "Closed note's pending changes were not restored on reopen." },
+    );
+    await expect(await ObsidianApp.getActiveFilePath()).toBe(notePath);
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
     await ObsidianApp.restoreConfirm();
   });
 
@@ -763,7 +803,7 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.getActiveFilePath()).toBe(notePath);
     await expect(await ObsidianApp.getActiveEditorContent()).toBe("saved base plus unsaved");
     await expect(await ObsidianApp.readVaultFile(notePath)).toBe("saved base");
-    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
     await ObsidianApp.restoreConfirm();
   });
 

@@ -41,7 +41,7 @@ describe("Multi-tab pending state", () => {
     // ...but A is still pending: the queue still holds it, the dot is still
     // "pending", and A's bytes never reached disk.
     await expect(await ObsidianApp.getPendingStatusCount()).toBe(1);
-    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
     await expect(await ObsidianApp.readVaultFile(noteA)).toBe("");
 
     // No confirm dialog should have been triggered by opening B in a new tab.
@@ -71,7 +71,7 @@ describe("Multi-tab pending state", () => {
     // A's autosave timer (30s) has not fired yet, so A must still read as pending
     // and remain unsaved on disk right after B is saved.
     await expect(await ObsidianApp.getPendingStatusCount()).toBe(1);
-    await expect(await ObsidianApp.getStatusIndicatorTitle()).toBe("Changes pending save");
+    await expect(await ObsidianApp.getStatusIndicatorTitle()).toContain("with unsaved changes");
     await expect(await ObsidianApp.readVaultFile(noteA)).toBe("");
   });
 });

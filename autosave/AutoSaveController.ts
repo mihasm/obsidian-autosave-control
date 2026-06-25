@@ -27,6 +27,11 @@ type WindowWithConfirm = Window & {
 };
 const MANUAL_SAVE_REQUEST_TTL_MS = 5000;
 const QUIT_SHORTCUT_INTENT_TTL_MS = 2000;
+// Cap how many unsaved-note names are spelled out in the close/quit confirm
+// dialog. A native confirm() does not scroll, so an unbounded list would grow
+// taller than the screen and push the OK/Cancel buttons out of reach; anything
+// beyond the cap is summarised as "…and N more".
+const MAX_LISTED_UNSAVED_NOTES = 5;
 
 type BeforeUnloadListener = (event: BeforeUnloadEvent) => void;
 type ElectronCloseEvent = { preventDefault: () => void };
@@ -611,8 +616,6 @@ export class AutoSaveController {
   private createOpenFileWrapper(originalOpenFile: OpenFileFn): OpenFileFn {
     const hasSubpathNavigationInOpenArgs = (args: unknown[]) => this.hasSubpathNavigationInOpenArgs(args);
     const syncLeafPendingData = (leaf: WorkspaceLeaf) => this.syncLeafPendingData(leaf);
-    const confirmLeafSwitchIfNeeded = (leaf: WorkspaceLeaf, filePath: string | null) => this.confirmLeafSwitchIfNeeded(leaf, filePath);
-    const getTargetFilePathFromOpenArgs = (args: unknown[]) => this.getTargetFilePathFromOpenArgs(args);
     const scheduleLiveRequestSaveWrap = (view: TextFileView) => this.scheduleLiveRequestSaveWrap(view);
     const captureLeafSavedData = (leaf: WorkspaceLeaf) => this.captureLeafSavedData(leaf);
     const schedulePendingDataRestoreInLeaf = (leaf: WorkspaceLeaf) => this.schedulePendingDataRestoreInLeaf(leaf);
@@ -623,10 +626,11 @@ export class AutoSaveController {
     const wrappedOpenFile = async function wrappedOpenFile(this: WorkspaceLeaf, ...args: unknown[]) {
       const shouldRestoreCursor = !hasSubpathNavigationInOpenArgs(args);
 
+      // Switching notes in the same tab no longer prompts in manual mode.
+      // syncLeafPendingData snapshots the outgoing note's edits into the
+      // pending-save queue, so they survive the switch and are restored when the
+      // user comes back to it (see schedulePendingDataRestoreInLeaf).
       syncLeafPendingData(this);
-      if (!confirmLeafSwitchIfNeeded(this, getTargetFilePathFromOpenArgs(args))) {
-        return;
-      }
 
       fileSwitchingLeaves.add(this);
 
@@ -649,8 +653,6 @@ export class AutoSaveController {
   private createSetViewStateWrapper(originalSetViewState: SetViewStateFn): SetViewStateFn {
     const hasSubpathNavigationInViewStateArgs = (args: unknown[]) => this.hasSubpathNavigationInViewStateArgs(args);
     const syncLeafPendingData = (leaf: WorkspaceLeaf) => this.syncLeafPendingData(leaf);
-    const confirmLeafSwitchIfNeeded = (leaf: WorkspaceLeaf, filePath: string | null) => this.confirmLeafSwitchIfNeeded(leaf, filePath);
-    const getTargetFilePathFromViewStateArgs = (args: unknown[]) => this.getTargetFilePathFromViewStateArgs(args);
     const scheduleLiveRequestSaveWrap = (view: TextFileView) => this.scheduleLiveRequestSaveWrap(view);
     const captureLeafSavedData = (leaf: WorkspaceLeaf) => this.captureLeafSavedData(leaf);
     const schedulePendingDataRestoreInLeaf = (leaf: WorkspaceLeaf) => this.schedulePendingDataRestoreInLeaf(leaf);
@@ -661,10 +663,10 @@ export class AutoSaveController {
     const wrappedSetViewState = async function wrappedSetViewState(this: WorkspaceLeaf, ...args: unknown[]) {
       const shouldRestoreCursor = !hasSubpathNavigationInViewStateArgs(args);
 
+      // As in wrappedOpenFile: no switch prompt in manual mode. The outgoing
+      // note's edits are snapshotted into the pending-save queue and restored on
+      // return.
       syncLeafPendingData(this);
-      if (!confirmLeafSwitchIfNeeded(this, getTargetFilePathFromViewStateArgs(args))) {
-        return;
-      }
 
       fileSwitchingLeaves.add(this);
 
@@ -687,33 +689,17 @@ export class AutoSaveController {
   private createDetachWrapper(originalDetach: DetachFn): DetachFn {
     const getLeafMarkdownFilePath = (leaf: WorkspaceLeaf) => this.getLeafMarkdownFilePath(leaf);
     const syncPendingDataForFile = (filePath: string) => this.syncPendingDataForFile(filePath);
-    const getLeafWindow = (leaf: WorkspaceLeaf) => this.getLeafWindow(leaf);
-    const discardPendingChangesInLeaf = (leaf: WorkspaceLeaf, filePath: string) => this.discardPendingChangesInLeaf(leaf, filePath);
-    const getSettings = this.getSettings;
-    const { pendingSaveQueue } = this;
 
     const wrappedDetach = function wrappedDetach(this: WorkspaceLeaf) {
+      // Closing a tab no longer prompts in manual mode. We snapshot the latest
+      // editor text into the pending-save queue before the leaf is torn down, so
+      // the unsaved changes survive: reopening the note restores them into the
+      // editor (see schedulePendingDataRestoreInLeaf) and they keep counting
+      // toward the status indicator and the quit/close confirm list. Nothing is
+      // written to disk and nothing is discarded.
       const filePath = getLeafMarkdownFilePath(this);
       if (filePath) {
         syncPendingDataForFile(filePath);
-      }
-
-      if (
-        filePath &&
-        getSettings().disableAutoSave &&
-        pendingSaveQueue.has(filePath)
-      ) {
-        const targetWindow = getLeafWindow(this);
-        const confirmWindow = isWindowWithConfirm(targetWindow) ? targetWindow : window;
-        const shouldDiscardUnsavedChanges = confirmWindow.confirm(
-          "This note has unsaved changes. Close it and discard those changes?"
-        );
-
-        if (!shouldDiscardUnsavedChanges) {
-          return;
-        }
-
-        discardPendingChangesInLeaf(this, filePath);
       }
 
       callWithArgs(originalDetach, this);
@@ -993,20 +979,6 @@ export class AutoSaveController {
     textFileView.data = savedData;
   }
 
-  private discardPendingChangesInLeaf(leaf: WorkspaceLeaf, filePath: string): void {
-    const siblingLeaf = this.findSiblingLeafForFilePath(leaf, filePath);
-    this.markLeafViewDiscarded(leaf);
-
-    if (siblingLeaf && siblingLeaf.view instanceof TextFileView) {
-      this.pendingSaveQueue.touchView(filePath, siblingLeaf.view);
-      this.syncPendingDataForFile(filePath);
-      return;
-    }
-
-    this.restoreSavedDataIntoLeaf(leaf, filePath);
-    this.pendingSaveQueue.clear(filePath);
-  }
-
   private discardPendingChangesForDeletedFile(filePath: string): void {
     for (const leaf of this.findLeavesForFilePath(filePath)) {
       this.markLeafViewDiscarded(leaf);
@@ -1022,40 +994,6 @@ export class AutoSaveController {
     }
   }
 
-  private findSiblingLeafForFilePath(currentLeaf: WorkspaceLeaf, filePath: string): WorkspaceLeaf | null {
-    for (const leaf of this.findLeavesForFilePath(filePath)) {
-      if (leaf !== currentLeaf && this.getLeafMarkdownFilePath(leaf) === filePath) {
-        return leaf;
-      }
-    }
-
-    return null;
-  }
-
-  private confirmLeafSwitchIfNeeded(leaf: WorkspaceLeaf, targetFilePath: string | null): boolean {
-    const currentFilePath = this.getLeafMarkdownFilePath(leaf);
-    if (
-      !this.getSettings().disableAutoSave
-      || !currentFilePath
-      || !this.pendingSaveQueue.has(currentFilePath)
-      || targetFilePath === currentFilePath
-    ) {
-      return true;
-    }
-
-    const targetWindow = this.getLeafWindow(leaf);
-    const confirmWindow = isWindowWithConfirm(targetWindow) ? targetWindow : window;
-    const shouldDiscardUnsavedChanges = confirmWindow.confirm(
-      "This note has unsaved changes. Switch notes and discard those changes?"
-    );
-    if (!shouldDiscardUnsavedChanges) {
-      return false;
-    }
-
-    this.discardPendingChangesInLeaf(leaf, currentFilePath);
-    return true;
-  }
-
   private confirmDeleteIfNeeded(filePath: string): boolean {
     if (!this.getSettings().disableAutoSave || !this.pendingSaveQueue.has(filePath)) {
       return true;
@@ -1067,11 +1005,6 @@ export class AutoSaveController {
     return confirmWindow.confirm("This note has unsaved changes. Delete the file and discard those changes?");
   }
 
-  private getTargetFilePathFromOpenArgs(args: unknown[]): string | null {
-    const target = args[0] as { path?: unknown } | undefined;
-    return typeof target?.path === "string" ? target.path : null;
-  }
-
   private hasSubpathNavigationInOpenArgs(args: unknown[]): boolean {
     const openState = args[1] as {
       subpath?: unknown;
@@ -1079,19 +1012,6 @@ export class AutoSaveController {
     } | undefined;
 
     return typeof openState?.subpath === "string" || typeof openState?.eState?.subpath === "string";
-  }
-
-  private getTargetFilePathFromViewStateArgs(args: unknown[]): string | null {
-    const state = args[0] as {
-      type?: unknown;
-      state?: { file?: unknown };
-    } | undefined;
-
-    if (state?.type !== "markdown") {
-      return null;
-    }
-
-    return typeof state.state?.file === "string" ? state.state.file : null;
   }
 
   private hasSubpathNavigationInViewStateArgs(args: unknown[]): boolean {
@@ -1180,7 +1100,7 @@ export class AutoSaveController {
 
     const confirmWindow = isWindowWithConfirm(targetWindow) ? targetWindow : window;
     const shouldDiscardUnsavedChanges = confirmWindow.confirm(
-      "You have unsaved changes. Quit Obsidian and discard those changes?"
+      this.composeUnsavedChangesMessage("Quit Obsidian and discard those changes?")
     );
     if (!shouldDiscardUnsavedChanges) {
       event.preventDefault();
@@ -1636,6 +1556,38 @@ export class AutoSaveController {
     }
   }
 
+  // Human-readable note names for everything that still has unsaved changes,
+  // sorted so the dialog is stable between opens. The vault-relative path is kept
+  // (so notes with the same name in different folders stay distinguishable) but
+  // the ".md" extension is dropped to match how Obsidian shows note titles.
+  // Also consumed by the status-bar hover tooltip (see SaveStatusIndicator).
+  getPendingNoteNames(): string[] {
+    return this.pendingSaveQueue.getPaths()
+      .map((filePath) => filePath.replace(/\.md$/i, ""))
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  // Build the close/quit confirm text with the list of unsaved notes embedded.
+  // The list is capped (see MAX_LISTED_UNSAVED_NOTES) because a native confirm()
+  // cannot scroll, and `question` is the trailing call to action that differs
+  // between closing a window and quitting the whole app.
+  private composeUnsavedChangesMessage(question: string): string {
+    const noteNames = this.getPendingNoteNames();
+    const count = noteNames.length;
+    const heading = count === 1
+      ? "You have 1 note with unsaved changes:"
+      : `You have ${count} notes with unsaved changes:`;
+
+    const listedNames = noteNames.slice(0, MAX_LISTED_UNSAVED_NOTES);
+    const lines = listedNames.map((name) => `• ${name}`);
+    const hiddenCount = count - listedNames.length;
+    if (hiddenCount > 0) {
+      lines.push(`…and ${hiddenCount} more`);
+    }
+
+    return `${heading}\n\n${lines.join("\n")}\n\n${question}`;
+  }
+
   // Ask the user (manual mode, issue #26) whether to save before closing, AFTER
   // beforeunload has reliably blocked the close. Runs in a deferred task so that
   // window.confirm is not suppressed (it is, while a beforeunload handler is on
@@ -1672,7 +1624,9 @@ export class AutoSaveController {
 
     return new Promise((resolve) => {
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-        const proceed = confirmWindow.confirm("You have unsaved changes. Close and discard those changes?");
+        const proceed = confirmWindow.confirm(
+          this.composeUnsavedChangesMessage("Close and discard those changes?"),
+        );
         body.removeClass("asc-hide-saving-overlay");
         resolve(proceed ? "discard" : "cancel");
       }));

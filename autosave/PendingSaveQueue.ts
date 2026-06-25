@@ -65,6 +65,10 @@ export class PendingSaveQueue {
     return this.pendingSavesByPath.size > 0;
   }
 
+  getPaths(): string[] {
+    return Array.from(this.pendingSavesByPath.keys());
+  }
+
   getLatestData(filePath: string): string | null {
     return this.pendingSavesByPath.get(filePath)?.latestData ?? null;
   }
