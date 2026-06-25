@@ -127,7 +127,6 @@ BRAT installs the plugin from this repository's GitHub releases and can update i
 - Unsaved changes are kept in memory until written to disk.
 - If Obsidian or your system crashes before saving, changes may be lost.
 - If workspace layout deferral is enabled, recent layout state can also be lost after a crash until `workspace.json` is flushed.
-- Closing the app via the window toolbar (x button) in "autosave disabled completely" doesn't show notification about pending changes but instead saves the pending notes automatically because it is impossible for plugins to block quit commands sent from that button due to Electron/Obsidian implementation specifics.
 - Some Obsidian features and community plugins only update after a save occurs. For example, the Outline (headings) pane on the right won't reflect new headings until the autosave fires. Because this plugin delays or disables saves, expect similar lag in any feature or plugin that reacts to file writes rather than in-editor changes.
 
 ## Testing
