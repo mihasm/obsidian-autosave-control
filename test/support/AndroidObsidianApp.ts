@@ -148,6 +148,72 @@ class AndroidObsidianApp {
     return (await this.getRuntimeSnapshot()).pendingSaveCount;
   }
 
+  async waitForPendingCount(expectedCount: number) {
+    await browser.waitUntil(async () => {
+      return (await this.getPendingStatusCount()) === expectedCount;
+    }, {
+      timeout: 10000,
+      timeoutMsg: `Pending save count did not become ${expectedCount} on Android in time.`,
+    });
+  }
+
+  /**
+   * Edit the active note through the editor API (not vault.modify, which writes
+   * straight to disk). This dirties the view exactly like a user keystroke would
+   * and drives the plugin's held requestSave path — keystroke synthesis is
+   * unreliable on the emulator, so we change the value programmatically and then
+   * request a save explicitly.
+   */
+  async editActiveNoteContent(content: string) {
+    await browser.execute((nextContent: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const view = app.workspace.activeLeaf?.view;
+      const editor = view?.editor;
+      if (!editor) {
+        throw new Error("No active editor is available to edit on Android.");
+      }
+
+      editor.setValue(nextContent);
+      if (typeof view.requestSave === "function") {
+        view.requestSave();
+      }
+    }, content);
+  }
+
+  /** Read a note straight from disk via the vault adapter (works inside the emulator). */
+  async readNoteFromDisk(notePath: string): Promise<string> {
+    return browser.execute(async (path: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      return app.vault.adapter.read(path) as Promise<string>;
+    }, notePath);
+  }
+
+  async waitForDiskContent(notePath: string, expectedContent: string, timeout = 10000) {
+    await browser.waitUntil(async () => {
+      return (await this.readNoteFromDisk(notePath)) === expectedContent;
+    }, {
+      timeout,
+      timeoutMsg: `Disk content of '${notePath}' did not become the expected value on Android in time.`,
+    });
+  }
+
+  /**
+   * Simulate the app being minimized/backgrounded by forcing
+   * document.visibilityState to "hidden" and firing visibilitychange — the same
+   * signal the OS sends when the user leaves Obsidian. The handler reads
+   * visibilityState synchronously during dispatch, so we restore it right after.
+   */
+  async simulateAppBackgrounded() {
+    await browser.execute(() => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+      delete (document as unknown as { visibilityState?: unknown }).visibilityState;
+    });
+  }
+
   async getRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     return browser.execute((pluginId: string) => {
       const app = (window as typeof window & { app?: any }).app;

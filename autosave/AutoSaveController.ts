@@ -152,6 +152,10 @@ export class AutoSaveController {
   private appIsQuitting = false;
   private electronApp: ElectronApp | null = null;
   private electronAppQuitListener: ElectronAppQuitListener | null = null;
+  // Mobile-only: removes the background-flush listeners (visibilitychange /
+  // pagehide). Mobile has no quit/window-close hook, so we flush pending saves
+  // when the app is backgrounded instead.
+  private mobileBackgroundFlushCleanup: (() => void) | null = null;
   // Obsidian's own one-shot window.onbeforeunload quit hook, captured so we can
   // re-arm it after the user picks "keep editing" (issue #26 close dialog).
   private obsidianOnBeforeUnload: ((event: BeforeUnloadEvent) => unknown) | null = null;
@@ -371,6 +375,10 @@ export class AutoSaveController {
       });
     }
 
+    if (Platform.isMobileApp) {
+      this.registerMobileBackgroundFlush();
+    }
+
     this.attachWindowObservers(window);
 
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
@@ -487,6 +495,8 @@ export class AutoSaveController {
     }
 
     this.unregisterAppQuitObserver();
+    this.mobileBackgroundFlushCleanup?.();
+    this.mobileBackgroundFlushCleanup = null;
     this.detachAllWindowObservers();
     this.restoreLiveRequestSaveOverrides();
     this.clearManualSaveRequests();
@@ -1260,8 +1270,7 @@ export class AutoSaveController {
   }
 
   private registerAppQuitObserver(): void {
-    const globalState = window as ElectronRequireHost;
-    const electron = globalState.require?.("electron");
+    const electron = this.getElectronModule();
     const app = electron?.remote?.app;
     if (!app || typeof app.on !== "function") {
       return;
@@ -1293,9 +1302,45 @@ export class AutoSaveController {
     this.appIsQuitting = false;
   }
 
+  // Mobile has no Electron quit / window-close hook (those are desktop-only and
+  // require("electron") even throws on iOS — issue #37). So on mobile we persist
+  // pending saves when the app is backgrounded ("minimized"). Together with an
+  // explicit save (the wrapped editor:save-file command), this is what flushes
+  // held edits in manual-only mode; in delayed mode it is a safety net for edits
+  // whose delay timer has not fired yet when the user leaves the app.
+  private registerMobileBackgroundFlush(): void {
+    const onVisibilityChange = () => {
+      if (activeDocument.visibilityState === "hidden") {
+        this.flushPendingSavesForBackground();
+      }
+    };
+    // pagehide is a backup for the rarer full teardown of the web view.
+    const onPageHide = () => this.flushPendingSavesForBackground();
+
+    activeDocument.addEventListener("visibilitychange", onVisibilityChange);
+    activeWindow.addEventListener("pagehide", onPageHide);
+
+    this.mobileBackgroundFlushCleanup = () => {
+      activeDocument.removeEventListener("visibilitychange", onVisibilityChange);
+      activeWindow.removeEventListener("pagehide", onPageHide);
+    };
+  }
+
+  private flushPendingSavesForBackground(): void {
+    // Snapshot the latest editor content synchronously first — the event handler
+    // cannot block the OS from suspending us, so the flush itself is best-effort.
+    this.pendingSaveQueue.refreshAllLatestData();
+    if (!this.pendingSaveQueue.hasAny()) {
+      return;
+    }
+
+    dlog("Flushing pending saves because the mobile app was backgrounded");
+    void this.pendingSaveQueue.flushAll();
+    void this.workspaceLayoutSaveController.flush();
+  }
+
   private exitApplicationAfterFlush(): boolean {
-    const globalState = window as ElectronRequireHost;
-    const electron = globalState.require?.("electron");
+    const electron = this.getElectronModule();
 
     try {
       if (typeof electron?.remote?.app?.exit === "function") {
@@ -1355,7 +1400,18 @@ export class AutoSaveController {
   // stays open, which is exactly the cancel-the-quit behaviour we want.
   // ---------------------------------------------------------------------------
   private getElectronModule(): ElectronModule | undefined {
-    return (window as ElectronRequireHost).require?.("electron");
+    // Electron only exists in the desktop app. On mobile `window.require` is
+    // present but throws "Could not resolve module: electron" rather than
+    // returning undefined, so guard on the platform and swallow any throw
+    // (issue #37 — this propagated out of onload and broke loading on iOS).
+    if (Platform.isMobileApp) {
+      return undefined;
+    }
+    try {
+      return (window as ElectronRequireHost).require?.("electron");
+    } catch {
+      return undefined;
+    }
   }
 
   private getNodeModule<T>(moduleName: string): T | undefined {
@@ -1464,8 +1520,19 @@ export class AutoSaveController {
   }
 
   private getElectronBrowserWindow(targetWindow: Window): ElectronBrowserWindow | null {
-    const globalState = targetWindow as ElectronRequireHost;
-    const electron = globalState.require?.("electron");
+    // Resolve electron from targetWindow specifically (popout windows each have
+    // their own require, and getCurrentWindow() returns the calling renderer's
+    // window). Mobile has no electron and require("electron") throws there, so
+    // guard the platform and swallow any throw (issue #37).
+    if (Platform.isMobileApp) {
+      return null;
+    }
+    let electron: ElectronModule | undefined;
+    try {
+      electron = (targetWindow as ElectronRequireHost).require?.("electron");
+    } catch {
+      return null;
+    }
     const browserWindow = electron?.remote?.getCurrentWindow?.();
     if (!browserWindow || typeof browserWindow.on !== "function" || typeof browserWindow.removeListener !== "function") {
       return null;
