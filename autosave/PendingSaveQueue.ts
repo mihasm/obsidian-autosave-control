@@ -9,6 +9,10 @@ type PendingSaveEntry = {
   timeoutId: number | null;
   ramRefreshIntervalId: number | null;
   latestData: string;
+  // True once a genuine user edit (keystroke / input / paste / cut in the editor)
+  // has fed this pending cycle. Used to tell a real "the user emptied this note"
+  // from a stale/blank snapshot taken off a not-yet-loaded view (issue #18).
+  hadUserEdit: boolean;
 };
 
 export class PendingSaveQueue {
@@ -25,7 +29,7 @@ export class PendingSaveQueue {
     private readonly onFlushComplete?: (filePath: string) => Promise<void> | void,
   ) {}
 
-  schedule(filePath: string, view: TextFileView) {
+  schedule(filePath: string, view: TextFileView, fromUserEdit = false) {
     if (!view.file) {
       return;
     }
@@ -33,6 +37,7 @@ export class PendingSaveQueue {
     const existingPendingSave = this.pendingSavesByPath.get(filePath);
     if (existingPendingSave) {
       existingPendingSave.view = view;
+      existingPendingSave.hadUserEdit ||= fromUserEdit;
 
       if (existingPendingSave.timeoutId != null) {
         window.clearTimeout(existingPendingSave.timeoutId);
@@ -52,9 +57,15 @@ export class PendingSaveQueue {
       timeoutId: this.createTimeout(filePath),
       ramRefreshIntervalId: this.createRamRefreshInterval(filePath),
       latestData: view.getViewData(),
+      hadUserEdit: fromUserEdit,
     });
     this.refreshLatestData(filePath);
     this.emitPendingSaveCount();
+  }
+
+  // Whether the note at this path has a pending save that a real user edit fed.
+  wasUserEdited(filePath: string): boolean {
+    return this.pendingSavesByPath.get(filePath)?.hadUserEdit ?? false;
   }
 
   has(filePath: string): boolean {
@@ -177,6 +188,19 @@ export class PendingSaveQueue {
       return;
     }
 
+    // Data-loss guard (issue #18): refuse to blank a note that still has content
+    // on disk when no genuine user edit fed this pending cycle. Such a blank
+    // snapshot comes from a view that had not actually loaded the file yet
+    // (vault still opening, or a deferred/unloading tab), which is how notes were
+    // silently cleared on startup. A note the user really emptied always carries a
+    // recorded edit (a keystroke/input/cut), so this never blocks a real change,
+    // and an explicit Ctrl/Cmd+S bypasses the queue entirely.
+    if (await this.wouldBlankNonEmptyFileWithoutEdit(filePath, file, pendingSave)) {
+      dlog("Refusing to overwrite non-empty note with blank content (issue #18)", filePath);
+      this.clear(filePath);
+      return;
+    }
+
     this.flushingPaths.add(filePath);
     try {
       // Write FIRST. Only retire the entry once the bytes actually land, so the
@@ -243,6 +267,36 @@ export class PendingSaveQueue {
     return window.setInterval(() => {
       this.refreshLatestData(filePath);
     }, PENDING_RAM_REFRESH_INTERVAL_MS);
+  }
+
+  private async wouldBlankNonEmptyFileWithoutEdit(
+    filePath: string,
+    file: TFile,
+    pendingSave: PendingSaveEntry,
+  ): Promise<boolean> {
+    // A real user edit backs this write, or the write is not a blanking one.
+    if (pendingSave.hadUserEdit || pendingSave.latestData.trim().length > 0) {
+      return false;
+    }
+
+    // About to write empty content for a note nobody actively edited. Only a
+    // problem if the note still holds content on disk — then blanking it loses
+    // data. If the bytes can't be read we cannot prove it is safe, so block.
+    const diskData = await this.readCurrentDiskData(file, filePath);
+    return diskData === null || diskData.trim().length > 0;
+  }
+
+  private async readCurrentDiskData(file: TFile, filePath: string): Promise<string | null> {
+    try {
+      const adapter = this.app.vault.adapter;
+      if (adapter instanceof FileSystemAdapter) {
+        return await adapter.read(filePath);
+      }
+
+      return await this.app.vault.read(file);
+    } catch {
+      return null;
+    }
   }
 
   private getPendingViewData(filePath: string, pendingSave: PendingSaveEntry): string | null {

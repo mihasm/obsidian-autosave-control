@@ -1219,4 +1219,31 @@ describe("Autosave Control manual scenarios", () => {
 
     await expectSavedAfterDelay(notePath, "dirty without typing");
   });
+
+  // Issue #18: notes were silently cleared on startup. A view whose file had not
+  // truly loaded yet (vault still opening / a deferred tab) exposes an empty
+  // buffer; Obsidian's own requestSave then queued that blank and the autosave
+  // flush wrote it over the real note. The guard must refuse to blank a note that
+  // still has content on disk unless a genuine user edit backs the change. The
+  // companion "cuts text and saves after the delay" test proves a real emptying
+  // still persists, so the guard is not over-broad.
+  it("does not blank a note when a not-yet-loaded view triggers a save (issue #18)", async () => {
+    const notePath = "regressions/issue-18-load-race.md";
+    const realContent = "# Important\n\nThese notes must survive a still-loading view.";
+
+    await enableDelayedAutosave();
+    await ObsidianApp.createAndOpenNote(notePath, realContent);
+    await ObsidianApp.runActiveViewSave();
+    await ObsidianApp.waitForSavedStatus();
+
+    // Empty the buffer with no keystroke (as a still-loading view would), then let
+    // Obsidian's requestSave fire — exactly the sequence that used to clear notes.
+    await ObsidianApp.setActiveViewDataWithoutEdit("");
+    await expect(await ObsidianApp.getActiveEditorContent()).toBe("");
+    await ObsidianApp.runActiveViewRequestSave();
+
+    // Wait well past the autosave delay: the real content must still be on disk.
+    await browser.pause((SHORT_DELAY_SECONDS + 2) * 1000);
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe(realContent);
+  });
 });

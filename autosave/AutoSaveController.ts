@@ -168,7 +168,10 @@ export class AutoSaveController {
           return;
         }
 
-        this.pendingSaveQueue.schedule(filePath, view);
+        // This callback only fires for real editor activity (keystroke / input /
+        // paste / cut), so mark the pending cycle as user-driven — that is what
+        // lets an intentional "empty the note" through the issue #18 blank guard.
+        this.pendingSaveQueue.schedule(filePath, view, true);
       },
       (event) => this.isManualSaveShortcut(event),
       (view, filePath, event) => this.handleManualSaveShortcut(view, filePath, event),
@@ -1600,6 +1603,19 @@ export class AutoSaveController {
     return false;
   }
 
+  private async fileHasContentOnDisk(file: TFile): Promise<boolean> {
+    try {
+      const adapter = this.app.vault.adapter;
+      const diskData = adapter instanceof FileSystemAdapter
+        ? await adapter.read(file.path)
+        : await this.app.vault.read(file);
+      return diskData.trim().length > 0;
+    } catch {
+      // Can't confirm it is safe to blank — assume there is content to protect.
+      return true;
+    }
+  }
+
   private async forceFlushOpenMarkdownLeaves(): Promise<void> {
     const fileSystemAdapter = this.app.vault.adapter;
 
@@ -1611,6 +1627,20 @@ export class AutoSaveController {
       const filePath = leaf.view.file.path;
       const textFileView = leaf.view as unknown as TextFileView;
       const latestData = textFileView.getViewData();
+
+      // Same data-loss guard as PendingSaveQueue.flush (issue #18): never blank a
+      // note that still has content on disk unless a real user edit backs it. A
+      // leaf can report empty content here while it is still loading, and this
+      // path writes every open leaf — so without this an unlucky close could clear
+      // notes the user never touched.
+      if (
+        latestData.trim().length === 0 &&
+        !this.pendingSaveQueue.wasUserEdited(filePath) &&
+        (await this.fileHasContentOnDisk(leaf.view.file))
+      ) {
+        dlog("Skipping blank overwrite of non-empty note on close (issue #18)", filePath);
+        continue;
+      }
 
       if (fileSystemAdapter instanceof FileSystemAdapter) {
         await fileSystemAdapter.write(filePath, latestData);

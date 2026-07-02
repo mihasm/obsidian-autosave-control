@@ -887,6 +887,21 @@ class ObsidianApp {
     });
   }
 
+  // Replace the active view's buffer WITHOUT going through the editor, i.e. no
+  // keystroke / input event. This mimics a view whose file has not truly loaded
+  // yet (vault still opening, or a deferred tab) — the state behind issue #18,
+  // where the plugin must not treat the empty buffer as a real user edit.
+  async setActiveViewDataWithoutEdit(data: string) {
+    await browser.execute((value) => {
+      const app = (window as typeof window & { app: any }).app;
+      const view = app.workspace.activeLeaf?.view;
+      view?.setViewData?.(value, false);
+      if (view) {
+        view.data = value;
+      }
+    }, data);
+  }
+
   async getVaultBasePath() {
     return browser.execute(() => {
       const app = (window as typeof window & { app: any }).app;
