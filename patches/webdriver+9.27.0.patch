@@ -1,0 +1,13 @@
+diff --git a/node_modules/webdriver/build/node.js b/node_modules/webdriver/build/node.js
+index 001290f..0169802 100644
+--- a/node_modules/webdriver/build/node.js
++++ b/node_modules/webdriver/build/node.js
+@@ -2048,7 +2048,7 @@ var FetchRequest = class extends WebDriverRequest {
+     try {
+       const globalDispatcher = getGlobalDispatcher();
+       if (globalDispatcher && (globalDispatcher.constructor.name === "ProxyAgent" || "proxy" in globalDispatcher || // Also check for other custom dispatcher types
+-      globalDispatcher.constructor.name !== "Agent" && globalDispatcher.constructor.name !== "MockAgent")) {
++      globalDispatcher.constructor.name !== "Agent" && globalDispatcher.constructor.name !== "MockAgent" && !globalDispatcher.constructor.name.endsWith("Wrapper"))) {
+         return globalDispatcher;
+       }
+     } catch {

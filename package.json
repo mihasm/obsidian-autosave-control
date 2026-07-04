@@ -17,7 +17,8 @@
 		"wdio:quit-save": "node ./scripts/verify-quit-save.mjs",
 		"wdio:quit-manual": "node ./scripts/verify-quit-manual.mjs",
 		"wdio:reload-no-save": "node ./scripts/verify-reload-no-save.mjs",
-		"wdio:all": "node ./scripts/run-wdio.mjs"
+		"wdio:all": "node ./scripts/run-wdio.mjs",
+		"postinstall": "patch-package"
 	},
 	"keywords": [
 		"save",
@@ -50,11 +51,15 @@
 		"expect-webdriverio": "^5.6.5",
 		"mocha": "^11.7.5",
 		"obsidian": "latest",
+		"patch-package": "^8.0.1",
 		"tslib": "2.4.0",
 		"tsx": "^4.21.0",
 		"typescript": "^4.9.5",
 		"typescript-eslint": "^8.61.1",
 		"wdio-obsidian-reporter": "^3.0.2",
 		"wdio-obsidian-service": "^3.0.2"
+	},
+	"overrides": {
+		"undici": "6.25.0"
 	}
 }
