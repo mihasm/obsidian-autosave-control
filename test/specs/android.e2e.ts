@@ -152,5 +152,33 @@ describe("Android", () => {
       await AndroidObsidianApp.waitForDiskContent(notePath, "after background");
       await expect(await AndroidObsidianApp.getPendingStatusCount()).toBe(0);
     });
+
+    // Issue #38 regression guard for the Capacitor resign-active flush.
+    //
+    // The fix targets iOS, where Capacitor's `appStateChange` maps to
+    // `willResignActive` — fired while JS still runs, before the OS can kill the
+    // app from the switcher. That timing cannot be reproduced on Android: a
+    // diagnostic run driving the real app switcher (KEYCODE_APP_SWITCH) here
+    // recorded the events [pause, appStateChange(isActive:true), resume] — the
+    // webview is frozen on background, so Capacitor never delivers
+    // appStateChange(isActive:false) at all, and no flush can run mid-background.
+    // So on Android we assert only what IS verifiable: the plugin loads on mobile
+    // without the issue #37 require("electron") crash, the undocumented Capacitor
+    // App bridge the fix depends on exists in the real Obsidian build, and the
+    // plugin actually registered its resign-active listener on it. The
+    // flush-on-leave behaviour itself is covered by the "backgrounded (minimized)"
+    // test above via visibilitychange, which Android does deliver.
+    it("loads on mobile and registers the Capacitor resign-active flush (issue #38)", async () => {
+      await browser.reloadObsidian({ vault: "test/vaults/simple" });
+      await AndroidObsidianApp.prepareCurrentSession();
+
+      const runtime = await AndroidObsidianApp.getRuntimeSnapshot();
+      await expect(runtime.isMobile).toBe(true);
+      await expect(runtime.pluginLoaded).toBe(true);
+
+      const bridge = await AndroidObsidianApp.getCapacitorBridgeSnapshot();
+      await expect(bridge.appPluginAvailable).toBe(true);
+      await expect(bridge.resignActiveFlushRegistered).toBe(true);
+    });
   });
 });

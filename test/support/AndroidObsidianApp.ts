@@ -214,6 +214,28 @@ class AndroidObsidianApp {
     });
   }
 
+  /**
+   * Whether the Capacitor App bridge the issue #38 fix relies on exists in this
+   * Obsidian mobile build, and whether the plugin's resign-active flush actually
+   * registered on it.
+   */
+  async getCapacitorBridgeSnapshot() {
+    return browser.execute((pluginId: string) => {
+      const host = window as typeof window & {
+        app?: any;
+        Capacitor?: { Plugins?: { App?: { addListener?: unknown } } };
+      };
+      const controller = host.app?.plugins?.plugins?.[pluginId]?.autosaveController as {
+        capacitorResignActiveFlushRegistered?: boolean;
+      } | undefined;
+
+      return {
+        appPluginAvailable: typeof host.Capacitor?.Plugins?.App?.addListener === "function",
+        resignActiveFlushRegistered: Boolean(controller?.capacitorResignActiveFlushRegistered),
+      };
+    }, PLUGIN_ID);
+  }
+
   async getRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     return browser.execute((pluginId: string) => {
       const app = (window as typeof window & { app?: any }).app;

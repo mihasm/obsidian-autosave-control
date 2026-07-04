@@ -79,6 +79,20 @@ type NodeOsModule = { tmpdir: () => string };
 type NodeRequireHost = Window & {
   require?: (module: string) => unknown;
 };
+// Minimal shape of the Capacitor bridge Obsidian mobile is built on. Not part
+// of the public Obsidian API, so every access must be feature-checked and
+// treated as best-effort (issue #38).
+type CapacitorAppState = { isActive?: boolean };
+type CapacitorPluginListenerHandle = { remove?: () => Promise<void> | void };
+type CapacitorAppPlugin = {
+  addListener?: (
+    eventName: "appStateChange",
+    listener: (state: CapacitorAppState) => void,
+  ) => CapacitorPluginListenerHandle | Promise<CapacitorPluginListenerHandle>;
+};
+type CapacitorHost = Window & {
+  Capacitor?: { Plugins?: { App?: CapacitorAppPlugin } };
+};
 
 function callWithArgs<TThis, TArgs extends unknown[], TResult>(
   fn: (this: TThis, ...args: TArgs) => TResult,
@@ -153,9 +167,13 @@ export class AutoSaveController {
   private electronApp: ElectronApp | null = null;
   private electronAppQuitListener: ElectronAppQuitListener | null = null;
   // Mobile-only: removes the background-flush listeners (visibilitychange /
-  // pagehide). Mobile has no quit/window-close hook, so we flush pending saves
-  // when the app is backgrounded instead.
+  // pagehide / Capacitor appStateChange). Mobile has no quit/window-close hook,
+  // so we flush pending saves when the app leaves the foreground instead.
   private mobileBackgroundFlushCleanup: (() => void) | null = null;
+  // Whether the Capacitor resign-active listener was actually installed — the
+  // bridge is undocumented, so this records at runtime if the issue #38 fix is
+  // in effect (asserted by the Android e2e, inspectable in the console).
+  private capacitorResignActiveFlushRegistered = false;
   // Obsidian's own one-shot window.onbeforeunload quit hook, captured so we can
   // re-arm it after the user picks "keep editing" (issue #26 close dialog).
   private obsidianOnBeforeUnload: ((event: BeforeUnloadEvent) => unknown) | null = null;
@@ -1314,22 +1332,92 @@ export class AutoSaveController {
   private registerMobileBackgroundFlush(): void {
     const onVisibilityChange = () => {
       if (activeDocument.visibilityState === "hidden") {
-        this.flushPendingSavesForBackground();
+        this.flushPendingSavesForBackground("app backgrounded");
       }
     };
     // pagehide is a backup for the rarer full teardown of the web view.
-    const onPageHide = () => this.flushPendingSavesForBackground();
+    const onPageHide = () => this.flushPendingSavesForBackground("web view teardown");
 
     activeDocument.addEventListener("visibilitychange", onVisibilityChange);
     activeWindow.addEventListener("pagehide", onPageHide);
 
+    // visibilitychange only fires once the app really enters background; merely
+    // opening the iOS app switcher just resigns active, and force-killing the app
+    // from there SIGKILLs the web view with no JS event at all — losing every
+    // held edit (issue #38). Capacitor's appStateChange DOES fire at
+    // resign-active, while JS still runs, so it is the only hook that gets a
+    // flush in before such a kill.
+    const removeCapacitorListener = this.registerCapacitorResignActiveFlush();
+
     this.mobileBackgroundFlushCleanup = () => {
       activeDocument.removeEventListener("visibilitychange", onVisibilityChange);
       activeWindow.removeEventListener("pagehide", onPageHide);
+      removeCapacitorListener();
     };
   }
 
-  private flushPendingSavesForBackground(): void {
+  // Registers the resign-active flush on the Capacitor bridge Obsidian mobile is
+  // built on. The bridge is not part of the public plugin API (though community
+  // plugins rely on it in practice), so every access is feature-checked and any
+  // throw is swallowed — worst case we degrade to the visibilitychange behavior.
+  // Returns a cleanup function; addListener may return the handle directly or a
+  // Promise of it depending on the bundled Capacitor version, so removal has to
+  // tolerate the handle arriving after cleanup already ran.
+  private registerCapacitorResignActiveFlush(): () => void {
+    let removed = false;
+    let listenerHandle: CapacitorPluginListenerHandle | null = null;
+
+    const removeHandle = (handle: CapacitorPluginListenerHandle | null) => {
+      try {
+        void handle?.remove?.();
+      } catch {
+        // Best-effort teardown of an undocumented bridge — nothing to recover.
+      }
+    };
+
+    try {
+      const capacitorApp = (activeWindow as CapacitorHost).Capacitor?.Plugins?.App;
+      if (typeof capacitorApp?.addListener !== "function") {
+        dlog("Capacitor App bridge unavailable; resign-active flush not registered");
+        return () => {};
+      }
+
+      const handleOrPromise = capacitorApp.addListener("appStateChange", (state) => {
+        if (state?.isActive === false) {
+          this.flushPendingSavesForBackground("app resigned active");
+        }
+      });
+
+      Promise.resolve(handleOrPromise).then(
+        (handle) => {
+          if (removed) {
+            removeHandle(handle);
+            return;
+          }
+          listenerHandle = handle;
+        },
+        () => {
+          this.capacitorResignActiveFlushRegistered = false;
+          dlog("Capacitor appStateChange listener registration failed");
+        },
+      );
+
+      this.capacitorResignActiveFlushRegistered = true;
+      dlog("Capacitor resign-active flush registered");
+    } catch (error) {
+      dlog("Capacitor App bridge access threw; resign-active flush not registered", error);
+      return () => {};
+    }
+
+    return () => {
+      removed = true;
+      this.capacitorResignActiveFlushRegistered = false;
+      removeHandle(listenerHandle);
+      listenerHandle = null;
+    };
+  }
+
+  private flushPendingSavesForBackground(reason: string): void {
     // Snapshot the latest editor content synchronously first — the event handler
     // cannot block the OS from suspending us, so the flush itself is best-effort.
     this.pendingSaveQueue.refreshAllLatestData();
@@ -1337,7 +1425,7 @@ export class AutoSaveController {
       return;
     }
 
-    dlog("Flushing pending saves because the mobile app was backgrounded");
+    dlog(`Flushing pending saves because the mobile app is leaving the foreground (${reason})`);
     void this.pendingSaveQueue.flushAll();
     void this.workspaceLayoutSaveController.flush();
   }
