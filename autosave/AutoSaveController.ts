@@ -1039,19 +1039,56 @@ export class AutoSaveController {
   private hasSubpathNavigationInOpenArgs(args: unknown[]): boolean {
     const openState = args[1] as {
       subpath?: unknown;
-      eState?: { subpath?: unknown };
+      eState?: unknown;
     } | undefined;
 
-    return typeof openState?.subpath === "string" || typeof openState?.eState?.subpath === "string";
+    return typeof openState?.subpath === "string" || this.isExplicitNavigationEphemeralState(openState?.eState);
   }
 
   private hasSubpathNavigationInViewStateArgs(args: unknown[]): boolean {
     const state = args[0] as {
       state?: { subpath?: unknown };
-      eState?: { subpath?: unknown };
+      eState?: unknown;
     } | undefined;
 
-    return typeof state?.state?.subpath === "string" || typeof state?.eState?.subpath === "string";
+    // setViewState(viewState, eState) carries the ephemeral navigation state as
+    // its second positional argument, which is how leaf.openFile forwards a
+    // global-search jump's eState. Check it as well as any inline eState so the
+    // nested setViewState wrapper does not re-enable the cursor restore that the
+    // openFile wrapper already suppressed (#40).
+    return (
+      typeof state?.state?.subpath === "string" ||
+      this.isExplicitNavigationEphemeralState(state?.eState) ||
+      this.isExplicitNavigationEphemeralState(args[1])
+    );
+  }
+
+  // True when the caller passed an ephemeral state that targets a specific
+  // location in the note (heading/block link, global-search match, an explicit
+  // line/cursor/scroll). In those cases the caller controls where the view
+  // lands, so we must not override it by restoring the previously captured
+  // cursor (see scheduleLeafCursorRestore). Missing this for search matches
+  // caused the view to jump to the hit and then snap back (#40).
+  private isExplicitNavigationEphemeralState(eState: unknown): boolean {
+    if (!eState || typeof eState !== "object") {
+      return false;
+    }
+
+    const state = eState as {
+      subpath?: unknown;
+      match?: unknown;
+      line?: unknown;
+      cursor?: unknown;
+      scroll?: unknown;
+    };
+
+    return (
+      typeof state.subpath === "string" ||
+      state.match !== undefined ||
+      state.line !== undefined ||
+      state.cursor !== undefined ||
+      state.scroll !== undefined
+    );
   }
 
   private getTargetFilePathFromDeleteArgs(args: unknown[]): string | null {

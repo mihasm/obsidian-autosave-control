@@ -477,6 +477,41 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.isEditorLineVisible(`# ${targetHeader}`)).toBe(true);
   });
 
+  it("does not restore the captured cursor over a search-result jump (#40)", async () => {
+    const notePath = "switching/search-jump.md";
+    const anchorPath = "switching/search-jump-anchor.md";
+    const matchLine = "needle target line";
+    const capturedCursor = { line: 5, ch: 3 };
+    const content = [
+      "top of note",
+      ...Array.from({ length: 60 }, (_, index) => `filler line ${index + 1}`),
+      matchLine,
+      ...Array.from({ length: 20 }, (_, index) => `tail line ${index + 1}`),
+    ].join("\n");
+
+    await enableDelayedAutosave();
+    await ObsidianApp.createAndOpenNote(notePath, content);
+    await ObsidianApp.runSaveCommand();
+    await ObsidianApp.waitForSavedStatus();
+
+    // Park the cursor somewhere non-trivial; this is the position the plugin
+    // captures when we switch away, and the one it wrongly restored in #40.
+    await ObsidianApp.setCursor(capturedCursor.line, capturedCursor.ch);
+    await expect(await ObsidianApp.getCursor()).toEqual(capturedCursor);
+
+    // Switch away (capturing the cursor for this note) then reopen it via a
+    // global-search match. The search jump owns where the view lands, so the
+    // captured cursor must not be restored over it.
+    await ObsidianApp.createAndOpenNote(anchorPath, "anchor");
+    await ObsidianApp.openNoteAtSearchMatch(notePath, matchLine);
+
+    // Let the plugin's post-open cursor-restore timeout run. Before the fix it
+    // fired setCursor(capturedCursor) here, snapping the view back off the match.
+    await browser.pause(300);
+
+    await expect(await ObsidianApp.getCursor()).not.toEqual(capturedCursor);
+  });
+
   it("closes a note tab with pending edits and saves the note", async () => {
     const notePath = "switching/close-tab.md";
 

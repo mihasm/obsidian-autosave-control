@@ -399,6 +399,51 @@ class ObsidianApp {
     await this.focusEditor(options);
   }
 
+  // Opens a note the way Obsidian's "Search in all files" does when a match is
+  // clicked: leaf.openFile(file, { eState: { match, line } }), which carries the
+  // navigation target the plugin's cursor-restore must not override (#40).
+  //
+  // The eState.match scroll isn't fully reproducible headlessly, so we also place
+  // the editor cursor on the matched line immediately after openFile resolves —
+  // the same continuation tick, before the plugin's setTimeout(0) cursor-restore
+  // runs. That mirrors the real bug: the search lands the view on the match, then
+  // the restore fires a tick later and (before the fix) snaps it back. Returns
+  // the 0-based matched line so the caller can assert where the view settled.
+  async openNoteAtSearchMatch(notePath: string, matchLineText: string) {
+    return browser.execute(async (nextNotePath: string, lineText: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const file = app.vault.getAbstractFileByPath(nextNotePath);
+
+      if (!file) {
+        throw new Error(`Note '${nextNotePath}' does not exist.`);
+      }
+
+      const content: string = await app.vault.read(file);
+      const lines = content.split("\n");
+      const line = lines.findIndex((lineContent: string) => lineContent.includes(lineText));
+
+      if (line < 0) {
+        throw new Error(`Search match '${lineText}' not found in '${nextNotePath}'.`);
+      }
+
+      const start = lines.slice(0, line).reduce((sum: number, lineContent: string) => sum + lineContent.length + 1, 0);
+      const end = start + lines[line].length;
+      const leaf = app.workspace.getMostRecentLeaf() ?? app.workspace.getLeaf(true);
+
+      // A global-search result jump opens the file with eState carrying the match
+      // and its line. That is the "explicit navigation" the plugin must not
+      // override with a previously captured cursor.
+      await leaf.openFile(file, {
+        eState: {
+          line,
+          match: { content, matches: [[start, end]] },
+        },
+      });
+
+      return line;
+    }, notePath, matchLineText);
+  }
+
   async renameActiveFileViaFileManager(newBaseName: string) {
     const currentFilePath = await this.getActiveFilePath();
     if (!currentFilePath) {
