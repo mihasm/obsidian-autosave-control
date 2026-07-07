@@ -128,6 +128,7 @@ BRAT installs the plugin from this repository's GitHub releases and can update i
 - If Obsidian or your system crashes before saving, changes may be lost.
 - If workspace layout deferral is enabled, recent layout state can also be lost after a crash until `workspace.json` is flushed.
 - Some Obsidian features and community plugins only update after a save occurs. For example, the Outline (headings) pane on the right won't reflect new headings until the autosave fires. Because this plugin delays or disables saves, expect similar lag in any feature or plugin that reacts to file writes rather than in-editor changes.
+- On mobile, force-killing Obsidian within a fraction of a second of editing can lose the last edit — a platform limitation the plugin can't fully prevent.
 
 ## Testing
 
