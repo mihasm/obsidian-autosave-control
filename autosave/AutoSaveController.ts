@@ -202,6 +202,7 @@ export class AutoSaveController {
       () => this.isUnloading,
       (pendingSaveCount) => this.onPendingSaveCountChange?.(pendingSaveCount),
       async () => this.workspaceLayoutSaveController.flush(),
+      (view) => this.isViewContentReliable(view),
     );
     this.workspaceLayoutSaveController = new WorkspaceLayoutSaveController(
       this.app,
@@ -1206,6 +1207,21 @@ export class AutoSaveController {
     }
 
     return view.file?.path ?? null;
+  }
+
+  // Whether the view's editor content can be trusted to belong to view.file. A
+  // leaf is in fileSwitchingLeaves for exactly the window of a same-tab switch,
+  // during which view.file already points at the new note while the editor still
+  // holds the previous note's text. Snapshotting then captured the wrong note's
+  // content and flushed it over the new note (#41), so the queue must not read a
+  // switching leaf's view.
+  private isViewContentReliable(view: TextFileView): boolean {
+    const leaf = view.leaf;
+    if (!leaf) {
+      return true;
+    }
+
+    return !this.fileSwitchingLeaves.has(leaf);
   }
 
   private findLeavesForFilePath(filePath: string): WorkspaceLeaf[] {

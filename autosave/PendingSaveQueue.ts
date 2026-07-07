@@ -27,6 +27,10 @@ export class PendingSaveQueue {
     private readonly shouldWriteDirectlyToVault: () => boolean,
     private readonly onPendingSaveCountChange: (pendingSaveCount: number) => void,
     private readonly onFlushComplete?: (filePath: string) => Promise<void> | void,
+    // False while a view is mid-switch and its editor may still hold another
+    // note's text (the load window behind #41). Defaults to always-reliable so
+    // the queue is usable standalone.
+    private readonly isViewContentReliable: (view: TextFileView) => boolean = () => true,
   ) {}
 
   schedule(filePath: string, view: TextFileView, fromUserEdit = false) {
@@ -49,6 +53,14 @@ export class PendingSaveQueue {
       }
       this.refreshLatestData(filePath);
       this.emitPendingSaveCount();
+      return;
+    }
+
+    // New entry: only snapshot content we can trust. If the view is mid-switch
+    // its editor may still show a different note (#41 load window); skip creating
+    // the entry now and let a later reliable edit/refresh seed it, rather than
+    // recording another note's text as this path's pending content.
+    if (!this.isViewContentReliable(view)) {
       return;
     }
 
@@ -301,6 +313,14 @@ export class PendingSaveQueue {
 
   private getPendingViewData(filePath: string, pendingSave: PendingSaveEntry): string | null {
     if (pendingSave.view.file?.path !== filePath) {
+      return null;
+    }
+
+    // Never snapshot a view whose editor still holds another note's text. During
+    // a same-tab switch view.file flips to the new note before its content loads,
+    // so this path-only match is momentarily true for the wrong content — which is
+    // how a note got overwritten with a different note's text (#41).
+    if (!this.isViewContentReliable(pendingSave.view)) {
       return null;
     }
 

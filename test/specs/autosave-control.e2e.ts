@@ -512,6 +512,79 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.getCursor()).not.toEqual(capturedCursor);
   });
 
+  it("REPRO #41: an edit during a same-tab switch must not snapshot the previous note's content", async () => {
+    const noteA = "leak/note-a.md";
+    const noteB = "leak/note-b.md";
+    const bodyA = "AAAA original body of note A";
+    const bodyB = "BBBB original body of note B";
+
+    // Long delay so held edits stay in RAM (unsaved) until we flush deliberately.
+    await enableDelayedAutosave(30);
+    await ObsidianApp.createAndOpenNote(noteA, bodyA);
+    await ObsidianApp.createAndOpenNote(noteB, bodyB);
+
+    // Give B a real held edit so it has a pending entry, then land back on A.
+    await ObsidianApp.openExistingNote(noteB);
+    await ObsidianApp.typeText(" [B was edited]");
+    await ObsidianApp.openExistingNote(noteA);
+
+    // Switch A -> B and let a user edit (paste/keystroke) land during the load
+    // window where the shared view already reports file=B but its editor still
+    // holds A's text. The plugin snapshots the live view for B's pending entry;
+    // guarding only on view.file.path === B, it captures A's stale content (#41).
+    const outcome = await browser.execute(async (aPath: string, bPath: string, aHead: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const leaf = app.workspace.getMostRecentLeaf() ?? app.workspace.activeLeaf;
+      const view = leaf.view;
+      const fileB = app.vault.getAbstractFileByPath(bPath);
+
+      const openPromise = leaf.openFile(fileB);
+      let editedInWindow = false;
+      let contentWhenEdited: string | null = null;
+      const t0 = performance.now();
+
+      for (let i = 0; i < 200000; i++) {
+        const inLoadWindow = view.file?.path === bPath && view.getViewData().startsWith(aHead);
+        if (inLoadWindow) {
+          // Simulate an edit arriving mid-switch: fire the same input event the
+          // editor emits on a keystroke/paste, which the plugin treats as activity.
+          const editorEl = view.containerEl.querySelector(".cm-editor") as HTMLElement | null;
+          if (editorEl) {
+            contentWhenEdited = view.getViewData().slice(0, 4);
+            editorEl.dispatchEvent(new Event("input", { bubbles: true }));
+            editedInWindow = true;
+          }
+          break;
+        }
+        if (view.file?.path === bPath && view.getViewData().startsWith("BBBB")) {
+          break;
+        }
+        if (performance.now() - t0 > 3000) {
+          break;
+        }
+        await (i % 2 === 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, 0)));
+      }
+
+      await openPromise;
+      return { editedInWindow, contentWhenEdited };
+    }, noteA, noteB, "AAAA");
+
+    // The repro is only meaningful if the edit actually landed during the window.
+    expect(outcome.editedInWindow).toBe(true);
+
+    // Flush held edits to disk (reschedule to a short delay) and let them settle.
+    await enableDelayedAutosave(1);
+    await browser.pause(3000);
+
+    const diskA = await ObsidianApp.readVaultFile(noteA);
+    const diskB = await ObsidianApp.readVaultFile(noteB);
+
+    // Note B must never end up holding note A's content.
+    expect(diskB).not.toContain("AAAA");
+    expect(diskB).toContain("BBBB");
+    expect(diskA).toContain("AAAA");
+  });
+
   it("closes a note tab with pending edits and saves the note", async () => {
     const notePath = "switching/close-tab.md";
 
