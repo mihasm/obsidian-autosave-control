@@ -427,7 +427,7 @@ describe("Autosave Control manual scenarios", () => {
     await expect(await ObsidianApp.readVaultFile(targetNotePath)).toBe(targetContent);
   });
 
-  it("loses the cursor position after switching away from a saved note and back", async () => {
+  it("restores the cursor position after switching away from a saved note and back", async () => {
     const originalNotePath = "switching/cursor-source.md";
     const targetNotePath = "switching/cursor-target.md";
 
@@ -442,6 +442,41 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.createAndOpenNote(targetNotePath, "other note");
     await ObsidianApp.openExistingNote(originalNotePath, { preserveCursor: true });
 
+    await expect(await ObsidianApp.getCursor()).toEqual({ line: 1, ch: 4 });
+  });
+
+  it("restores the cursor after switching away from a note with UNSAVED edits and back (manual mode)", async () => {
+    const editedNotePath = "switching/manual-cursor-source.md";
+    const otherNotePath = "switching/manual-cursor-other.md";
+
+    // Manual mode: edits are withheld from disk and held as pending data, so on
+    // switch-back the plugin must re-inject them via setViewData — the call that
+    // resets the caret to (0,0) and the entire reason the cursor capture/restore
+    // exists. This is the path test #430 above does NOT cover (it saves first).
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(editedNotePath, "first line\nsecond line\nthird line");
+
+    // Make an unsaved edit so the note carries pending data across the switch.
+    // typeText focuses the editor (caret jumps to end-of-doc) then types, so the
+    // "X" lands at the very end -> "third lineX", and is never written to disk.
+    await ObsidianApp.typeText("X");
+    await browser.pause(200);
+
+    // Park the caret somewhere non-trivial; this is the position we expect back.
+    await ObsidianApp.setCursor(1, 4);
+    await expect(await ObsidianApp.getCursor()).toEqual({ line: 1, ch: 4 });
+
+    // Switch away (plugin snapshots pending data + captures the caret)...
+    await ObsidianApp.createAndOpenNote(otherNotePath, "other note");
+    // ...and back into the SAME leaf. preserveCursor so the harness does not move
+    // the caret to end-of-doc; whatever the plugin leaves is what we assert.
+    await ObsidianApp.openExistingNote(editedNotePath, { preserveCursor: true });
+    await browser.pause(400); // let the plugin's setTimeout(0) restore fire
+
+    // Control: the unsaved edit survived the round-trip, proving the setViewData
+    // re-injection (the caret-clobbering path) actually ran.
+    await expect(await ObsidianApp.getActiveEditorContent()).toContain("third lineX");
+    // The actual claim under test: the caret is back where we left it.
     await expect(await ObsidianApp.getCursor()).toEqual({ line: 1, ch: 4 });
   });
 
