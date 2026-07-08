@@ -1320,6 +1320,103 @@ class ObsidianApp {
     await this.focusEditor();
   }
 
+  // Open a note in a NEW split pane next to the current one (the "Split right"
+  // gesture, Cmd+Alt+2). Creates the file if needed. After this both the
+  // original note and the new note are visible side by side in separate leaves.
+  async openNoteInSplit(notePath: string, initialContent = "", direction: "vertical" | "horizontal" = "vertical") {
+    await browser.execute(async (nextNotePath: string, nextInitialContent: string, nextDirection: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const parentPath = nextNotePath.includes("/") ? nextNotePath.split("/").slice(0, -1).join("/") : "";
+
+      if (parentPath && !app.vault.getAbstractFileByPath(parentPath)) {
+        await app.vault.createFolder(parentPath);
+      }
+
+      let file = app.vault.getAbstractFileByPath(nextNotePath);
+      if (!file) {
+        file = await app.vault.create(nextNotePath, nextInitialContent);
+      } else {
+        await app.vault.modify(file, nextInitialContent);
+      }
+
+      const leaf = app.workspace.getLeaf("split", nextDirection);
+      await leaf.openFile(file);
+    }, notePath, initialContent, direction);
+
+    await this.waitForActiveFile(notePath);
+    await this.focusEditor();
+  }
+
+  // Open an EXISTING note in a new split pane.
+  async openExistingNoteInSplit(notePath: string, direction: "vertical" | "horizontal" = "vertical") {
+    await browser.execute(async (nextNotePath: string, nextDirection: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const file = app.vault.getAbstractFileByPath(nextNotePath);
+
+      if (!file) {
+        throw new Error(`Note '${nextNotePath}' does not exist.`);
+      }
+
+      const leaf = app.workspace.getLeaf("split", nextDirection);
+      await leaf.openFile(file);
+    }, notePath, direction);
+
+    await this.waitForActiveFile(notePath);
+    await this.focusEditor();
+  }
+
+  // Move focus to the pane (leaf) that currently shows the given note, the way a
+  // user clicking into that pane does. Uses setActiveLeaf with focus, which is
+  // exactly what a pane click resolves to and fires the same active-leaf-change
+  // event.
+  async focusLeafForFile(notePath: string, options: { preserveCursor?: boolean } = {}) {
+    await browser.execute((nextNotePath: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const leaf = app.workspace.getLeavesOfType("markdown")
+        .find((candidate: any) => candidate.view?.file?.path === nextNotePath);
+
+      if (!leaf) {
+        throw new Error(`No open pane is showing note '${nextNotePath}'.`);
+      }
+
+      app.workspace.setActiveLeaf(leaf, { focus: true });
+    }, notePath);
+
+    await this.waitForActiveFile(notePath);
+    await this.focusEditor(options);
+  }
+
+  // Number of open markdown panes (leaves) currently showing the given note.
+  async countLeavesForFile(notePath: string) {
+    return browser.execute((nextNotePath: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      return app.workspace.getLeavesOfType("markdown")
+        .filter((candidate: any) => candidate.view?.file?.path === nextNotePath).length;
+    }, notePath);
+  }
+
+  // Close the pane (leaf) currently showing the given note. When several panes
+  // show it, the first one found is detached.
+  async closeLeafForFile(notePath: string) {
+    await browser.execute((nextNotePath: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const leaf = app.workspace.getLeavesOfType("markdown")
+        .find((candidate: any) => candidate.view?.file?.path === nextNotePath);
+
+      if (!leaf) {
+        throw new Error(`No open pane is showing note '${nextNotePath}'.`);
+      }
+
+      leaf.detach();
+    }, notePath);
+  }
+
+  // Type into whichever pane currently shows the given note, focusing it first.
+  async typeTextIntoLeafForFile(notePath: string, text: string) {
+    await this.focusLeafForFile(notePath, { preserveCursor: true });
+    await browser.keys(Array.from(text));
+  }
+
   async switchToWindow(handle: string) {
     await browser.switchToWindow(handle);
     await this.waitForWorkspaceReady();
