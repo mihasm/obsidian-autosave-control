@@ -12,6 +12,10 @@ type OnUnloadFileFn = (this: TextFileView, file: TFile) => Promise<void>;
 type SetViewStateFn = (this: WorkspaceLeaf, ...args: unknown[]) => Promise<unknown>;
 type DetachFn = (this: WorkspaceLeaf) => void;
 type DeleteFileFn = (this: unknown, ...args: unknown[]) => unknown;
+type ProcessFileFn = (this: unknown, ...args: unknown[]) => Promise<string>;
+// Vault.process is typed with concrete parameters upstream; the wrapper only
+// forwards them, so it is installed through this looser view of the method.
+type VaultWithProcess = { process?: ProcessFileFn };
 type CommandCallback = (...args: unknown[]) => unknown;
 type SaveCommandCheckCallback = (checking: boolean) => boolean | void;
 type CommandDefinition = {
@@ -122,6 +126,7 @@ export class AutoSaveController {
   private originalVaultTrash: DeleteFileFn | null = null;
   private originalVaultDelete: DeleteFileFn | null = null;
   private originalFileManagerTrashFile: DeleteFileFn | null = null;
+  private originalVaultProcess: ProcessFileFn | null = null;
   private originalSaveCommandCheckCallback: SaveCommandCheckCallback | null = null;
   private originalReloadWithoutSavingCommandCallback: CommandCallback | null = null;
   private installedSaveWrapper: SaveFn | null = null;
@@ -133,6 +138,7 @@ export class AutoSaveController {
   private installedVaultTrashWrapper: DeleteFileFn | null = null;
   private installedVaultDeleteWrapper: DeleteFileFn | null = null;
   private installedFileManagerTrashFileWrapper: DeleteFileFn | null = null;
+  private installedVaultProcessWrapper: ProcessFileFn | null = null;
   private installedSaveCommandCheckCallback: SaveCommandCheckCallback | null = null;
   private installedReloadWithoutSavingCommandCallback: CommandCallback | null = null;
   private isUnloading = false;
@@ -288,6 +294,13 @@ export class AutoSaveController {
       this.originalFileManagerTrashFile = this.unwrapWrappedFunction(fileManagerWithTrashFile.trashFile);
       this.installedFileManagerTrashFileWrapper = this.createDeleteWrapper(this.originalFileManagerTrashFile);
       writableFileManagerWithTrashFile.trashFile = this.installedFileManagerTrashFileWrapper;
+    }
+
+    const vaultWithProcess = this.app.vault as unknown as VaultWithProcess;
+    if (typeof vaultWithProcess.process === "function") {
+      this.originalVaultProcess = this.unwrapWrappedFunction(vaultWithProcess.process);
+      this.installedVaultProcessWrapper = this.createProcessWrapper(this.originalVaultProcess);
+      vaultWithProcess.process = this.installedVaultProcessWrapper;
     }
 
     this.wrapSaveCommand();
@@ -496,6 +509,13 @@ export class AutoSaveController {
     }
     this.originalFileManagerTrashFile = null;
     this.installedFileManagerTrashFileWrapper = null;
+
+    const vaultWithProcess = this.app.vault as unknown as VaultWithProcess;
+    if (this.originalVaultProcess && vaultWithProcess.process === this.installedVaultProcessWrapper) {
+      vaultWithProcess.process = this.originalVaultProcess;
+    }
+    this.originalVaultProcess = null;
+    this.installedVaultProcessWrapper = null;
 
     this.restoreSaveCommand();
     this.restoreReloadWithoutSavingCommand();
@@ -750,7 +770,7 @@ export class AutoSaveController {
   }
 
   private createDeleteWrapper(originalDelete: DeleteFileFn): DeleteFileFn {
-    const getTargetFilePathFromDeleteArgs = (args: unknown[]) => this.getTargetFilePathFromDeleteArgs(args);
+    const getTargetFilePathFromDeleteArgs = (args: unknown[]) => this.getTargetFilePathFromFileArgs(args);
     const confirmDeleteIfNeeded = (filePath: string) => this.confirmDeleteIfNeeded(filePath);
     const discardPendingChangesForDeletedFile = (filePath: string) => this.discardPendingChangesForDeletedFile(filePath);
     const { confirmedDeletionPaths } = this;
@@ -780,6 +800,60 @@ export class AutoSaveController {
     };
 
     return this.markWrappedFunction(wrappedDelete, originalDelete);
+  }
+
+  // vault.process is Obsidian's atomic read-modify-write: it reads the file FROM
+  // DISK inside the call, hands that text to the caller's callback and writes the
+  // result back. It is what fileManager.processFrontMatter is built on, so it is
+  // the API plugins like frontmatter-modified-date, Linter and Templater use to
+  // rewrite a note behind the editor's back.
+  //
+  // While we hold a save, the bytes on disk are stale, so such a caller edits a
+  // version of the note that is missing everything the user has typed since. The
+  // dirty-flag fix (#43) means Obsidian merges its write back into the editor
+  // rather than overwriting it, but that merge is a fuzzy patch-apply: a hunk it
+  // cannot place — typically an edit inside the very region the caller also
+  // rewrote, e.g. the frontmatter block — is dropped without a trace.
+  //
+  // Flushing our held content first removes the conflict at the source: the
+  // callback then reads what the user actually has in front of them, and its
+  // result already contains their edits.
+  private createProcessWrapper(originalProcess: ProcessFileFn): ProcessFileFn {
+    const getTargetFilePathFromFileArgs = (args: unknown[]) => this.getTargetFilePathFromFileArgs(args);
+    const flushPendingSaveBeforeExternalProcess = (filePath: string) =>
+      this.flushPendingSaveBeforeExternalProcess(filePath);
+
+    const wrappedProcess = async function wrappedProcess(this: unknown, ...args: unknown[]) {
+      const filePath = getTargetFilePathFromFileArgs(args);
+      if (filePath) {
+        await flushPendingSaveBeforeExternalProcess(filePath);
+      }
+
+      return callWithArgs(originalProcess, this, ...args);
+    };
+
+    return this.markWrappedFunction(wrappedProcess, originalProcess);
+  }
+
+  private async flushPendingSaveBeforeExternalProcess(filePath: string): Promise<void> {
+    // Manual-only mode promises that nothing is ever written without an explicit
+    // save, and that outranks the convenience of a clean read here: a held note
+    // stays held and falls back to Obsidian's merge (which the #43 fix restored).
+    // In delayed mode the write is due within the delay anyway, so bringing it
+    // forward costs nothing and keeps the caller's read coherent.
+    if (this.getSettings().disableAutoSave) {
+      return;
+    }
+
+    if (!this.pendingSaveQueue.has(filePath)) {
+      return;
+    }
+
+    dlog("Flushing pending save before an external vault.process read", { filePath });
+    // Our own flush writes through view.save() / vault.modify, never through
+    // vault.process, so this cannot recurse into the wrapper; flush() also guards
+    // re-entrancy per path.
+    await this.pendingSaveQueue.flush(filePath);
   }
 
   private markWrappedFunction<T>(wrapper: T, original: T): T {
@@ -1101,7 +1175,9 @@ export class AutoSaveController {
     );
   }
 
-  private getTargetFilePathFromDeleteArgs(args: unknown[]): string | null {
+  // Both vault.trash/delete and vault.process take the target file as their
+  // first argument.
+  private getTargetFilePathFromFileArgs(args: unknown[]): string | null {
     const target = args[0] as { path?: unknown } | undefined;
     return typeof target?.path === "string" ? target.path : null;
   }

@@ -129,6 +129,7 @@ BRAT installs the plugin from this repository's GitHub releases and can update i
 - If workspace layout deferral is enabled, recent layout state can also be lost after a crash until `workspace.json` is flushed.
 - Some Obsidian features and community plugins only update after a save occurs. For example, the Outline (headings) pane on the right won't reflect new headings until the autosave fires. Because this plugin delays or disables saves, expect similar lag in any feature or plugin that reacts to file writes rather than in-editor changes.
 - On mobile, force-killing Obsidian within a fraction of a second of editing can lose the last edit — a platform limitation the plugin can't fully prevent.
+- Plugins that rewrite a note directly on disk (Frontmatter Modified Date, Linter, Templater, sync clients, ...) read the file, not your editor, so while a save is held they would otherwise work from an outdated copy. In **Delayed Autosave** mode such a rewrite first flushes that note's pending changes, so it reads what you actually have on screen — one write earlier than the delay alone would have made. In **Autosave Disabled** mode nothing is ever written on your behalf: Obsidian merges the change into your editor instead and your note stays unsaved until you save it.
 
 ## Testing
 

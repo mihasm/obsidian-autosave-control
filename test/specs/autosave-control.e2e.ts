@@ -1423,13 +1423,40 @@ describe("Autosave Control manual scenarios", () => {
     await expect(editorContent).toContain("modified: 2026-07-26T12:00");
     await expect(editorContent).toContain("existing body");
 
-    // …and the delayed flush must persist the merged text, not a wiped version.
+    // …and disk must end up with the same text, never a wiped version.
     await ObsidianApp.waitForVaultFileContaining(
       notePath,
       [typedText, "modified: 2026-07-26T12:00", "# Notes"],
       (EXTERNAL_WRITE_SAVE_DELAY_SECONDS + 6) * 1000,
     );
-    await ObsidianApp.waitForSavedStatus();
+    await ObsidianApp.waitForSavedStatus((EXTERNAL_WRITE_SAVE_DELAY_SECONDS + 6) * 1000);
+  });
+
+  // Second layer for #43. Obsidian's merge is a fuzzy patch-apply, so a hunk it
+  // cannot place — an edit inside the very region the caller also rewrote — is
+  // still dropped silently. vault.process reads the file inside the call, so
+  // flushing our held content first lets the caller read what the user actually
+  // has in front of them and the conflict never arises.
+  it("flushes held edits before another plugin's vault.process reads the file (issue #43)", async () => {
+    const notePath = "regressions/issue-43-preflush.md";
+    const initialContent = "# Preflush\n\nexisting body";
+    const typedText = " plus unsaved typing";
+
+    await enableDelayedAutosave(EXTERNAL_WRITE_SAVE_DELAY_SECONDS);
+    await ObsidianApp.createAndOpenNote(notePath, initialContent);
+    await ObsidianApp.typeText(typedText);
+    await ObsidianApp.waitForPendingStatus();
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe(initialContent);
+
+    // processFrontMatter resolves only once its write has landed, so what is on
+    // disk right after it is exactly what its callback was handed plus the new
+    // property. The typing has to be in there — and long before the save delay
+    // would have elapsed on its own.
+    await ObsidianApp.setFrontmatterPropertyExternally(notePath, "modified", "2026-07-26T12:00");
+    const contentAfterExternalWrite = await ObsidianApp.readVaultFile(notePath);
+    await expect(contentAfterExternalWrite).toContain(typedText);
+    await expect(contentAfterExternalWrite).toContain("modified: 2026-07-26T12:00");
+    await expect(await ObsidianApp.getActiveEditorContent()).toContain(typedText);
   });
 
   it("keeps held edits through an external rewrite in manual-only mode (issue #43)", async () => {
@@ -1446,7 +1473,9 @@ describe("Autosave Control manual scenarios", () => {
     await browser.pause(1000);
 
     await expect(await ObsidianApp.getActiveEditorContent()).toContain(typedText);
-    // Manual mode still writes nothing of its own: the typing stays held.
+    // Manual mode still writes nothing of its own — no pre-flush here, because
+    // "nothing reaches disk without an explicit save" outranks handing the caller
+    // a clean read. The held edits fall back to Obsidian's merge instead.
     await expect(await ObsidianApp.readVaultFile(notePath)).not.toContain(typedText);
     await expect(await ObsidianApp.getPendingStatusCount()).toBe(1);
 
