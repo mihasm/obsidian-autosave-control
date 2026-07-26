@@ -33,7 +33,11 @@ export class PendingSaveQueue {
     private readonly isViewContentReliable: (view: TextFileView) => boolean = () => true,
   ) {}
 
-  schedule(filePath: string, view: TextFileView, fromUserEdit = false) {
+  // resetDelay=false keeps an already-running idle countdown intact. Callers pass
+  // it when the trigger was not an edit — a suppressed save(), which Obsidian
+  // fires on editor blur or a view-mode switch — so merely clicking away from the
+  // editor cannot postpone the write by another full delay.
+  schedule(filePath: string, view: TextFileView, fromUserEdit = false, resetDelay = true) {
     if (!view.file) {
       return;
     }
@@ -43,11 +47,14 @@ export class PendingSaveQueue {
       existingPendingSave.view = view;
       existingPendingSave.hadUserEdit ||= fromUserEdit;
 
-      if (existingPendingSave.timeoutId != null) {
-        window.clearTimeout(existingPendingSave.timeoutId);
+      if (resetDelay) {
+        if (existingPendingSave.timeoutId != null) {
+          window.clearTimeout(existingPendingSave.timeoutId);
+        }
+
+        existingPendingSave.timeoutId = this.createTimeout(filePath);
       }
 
-      existingPendingSave.timeoutId = this.createTimeout(filePath);
       if (existingPendingSave.ramRefreshIntervalId === null) {
         existingPendingSave.ramRefreshIntervalId = this.createRamRefreshInterval(filePath);
       }

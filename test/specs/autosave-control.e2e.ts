@@ -4,6 +4,12 @@ import ObsidianApp from "../support/ObsidianApp";
 const SHORT_DELAY_SECONDS = 3;
 const DEFAULT_SAVE_WAIT_TIMEOUT_MS = 7000;
 const LONG_WORKSPACE_LAYOUT_DELAY_SECONDS = 10;
+// Long enough that an external write to the file lands well inside the hold
+// window, the way frontmatter-modified-date's timeout does (issue #43).
+const EXTERNAL_WRITE_SAVE_DELAY_SECONDS = 8;
+// Long enough to blur mid-countdown and still tell "kept the deadline" apart from
+// "restarted the delay" without a knife-edge timing margin.
+const BLUR_DEADLINE_SAVE_DELAY_SECONDS = 6;
 
 async function enableDelayedAutosave(saveDelaySeconds = SHORT_DELAY_SECONDS) {
   await ObsidianApp.setPluginSettings({
@@ -1388,5 +1394,90 @@ describe("Autosave Control manual scenarios", () => {
     // Wait well past the autosave delay: the real content must still be on disk.
     await browser.pause((SHORT_DELAY_SECONDS + 2) * 1000);
     await expect(await ObsidianApp.readVaultFile(notePath)).toBe(realContent);
+  });
+
+  // Issue #43: a plugin that rewrites the file on disk while we hold a save wiped
+  // the held edits. Obsidian merges disk changes into an open editor only when the
+  // view is marked dirty, and that flag is set by the very requestSave the plugin
+  // swallows — so the view looked clean, Obsidian replaced the buffer with the
+  // disk content, and the next flush wrote that wiped version back out.
+  it("keeps held edits when another plugin rewrites the file on disk (issue #43)", async () => {
+    const notePath = "regressions/issue-43-external-frontmatter.md";
+    const initialContent = "# Notes\n\nexisting body";
+    const typedText = " plus unsaved typing";
+
+    await enableDelayedAutosave(EXTERNAL_WRITE_SAVE_DELAY_SECONDS);
+    await ObsidianApp.createAndOpenNote(notePath, initialContent);
+    await ObsidianApp.typeText(typedText);
+    await ObsidianApp.waitForPendingStatus();
+
+    // Nothing is on disk yet — this is exactly the window in which
+    // frontmatter-modified-date fires its processFrontMatter timeout.
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe(initialContent);
+    await ObsidianApp.setFrontmatterPropertyExternally(notePath, "modified", "2026-07-26T12:00");
+    await browser.pause(1000);
+
+    // The editor must still hold the typing, now merged with the new frontmatter.
+    const editorContent = await ObsidianApp.getActiveEditorContent();
+    await expect(editorContent).toContain(typedText);
+    await expect(editorContent).toContain("modified: 2026-07-26T12:00");
+    await expect(editorContent).toContain("existing body");
+
+    // …and the delayed flush must persist the merged text, not a wiped version.
+    await ObsidianApp.waitForVaultFileContaining(
+      notePath,
+      [typedText, "modified: 2026-07-26T12:00", "# Notes"],
+      (EXTERNAL_WRITE_SAVE_DELAY_SECONDS + 6) * 1000,
+    );
+    await ObsidianApp.waitForSavedStatus();
+  });
+
+  it("keeps held edits through an external rewrite in manual-only mode (issue #43)", async () => {
+    const notePath = "regressions/issue-43-external-frontmatter-manual.md";
+    const initialContent = "# Manual\n\nexisting body";
+    const typedText = " plus unsaved typing";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.createAndOpenNote(notePath, initialContent);
+    await ObsidianApp.typeText(typedText);
+    await ObsidianApp.waitForPendingStatus();
+
+    await ObsidianApp.setFrontmatterPropertyExternally(notePath, "modified", "2026-07-26T12:00");
+    await browser.pause(1000);
+
+    await expect(await ObsidianApp.getActiveEditorContent()).toContain(typedText);
+    // Manual mode still writes nothing of its own: the typing stays held.
+    await expect(await ObsidianApp.readVaultFile(notePath)).not.toContain(typedText);
+    await expect(await ObsidianApp.getPendingStatusCount()).toBe(1);
+
+    await ObsidianApp.runSaveCommand();
+    await ObsidianApp.waitForVaultFileContaining(notePath, [typedText, "modified: 2026-07-26T12:00"]);
+    await ObsidianApp.waitForSavedStatus();
+  });
+
+  // Companion to the #43 fix: marking the view dirty means Obsidian's blur-driven
+  // saveImmediately() now reaches the wrapped save(). Suppressing that save must
+  // not re-arm the timer, or clicking out of the editor would postpone every write
+  // by another full delay.
+  it("does not postpone the pending save when the editor loses focus", async () => {
+    const notePath = "regressions/issue-43-blur-keeps-deadline.md";
+    const typedText = "typed then clicked away";
+
+    await enableDelayedAutosave(BLUR_DEADLINE_SAVE_DELAY_SECONDS);
+    await ObsidianApp.createAndOpenNote(notePath);
+    await ObsidianApp.typeText(typedText);
+    await ObsidianApp.waitForPendingStatus();
+
+    // Blur halfway through the countdown. The save must still land on the original
+    // deadline, i.e. within the remaining half plus slack — not a full delay later.
+    await browser.pause((BLUR_DEADLINE_SAVE_DELAY_SECONDS / 2) * 1000);
+    await ObsidianApp.blurEditor();
+    await expect(await ObsidianApp.readVaultFile(notePath)).toBe("");
+
+    await ObsidianApp.waitForVaultFileContent(
+      notePath,
+      typedText,
+      (BLUR_DEADLINE_SAVE_DELAY_SECONDS / 2) * 1000 + 2500,
+    );
   });
 });

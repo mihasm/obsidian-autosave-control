@@ -533,6 +533,7 @@ export class AutoSaveController {
     const consumeManualSaveRequest = (filePath: string) => this.consumeManualSaveRequest(filePath);
     const captureCurrentViewData = (filePath: string, view: TextFileView) => this.captureCurrentViewData(filePath, view);
     const shouldHoldSave = (view: TextFileView, filePath: string) => this.shouldHoldSave(view, filePath);
+    const markViewDirty = (view: TextFileView) => this.markViewDirty(view);
     const { discardedViews, pendingSaveQueue, workspaceLayoutSaveController } = this;
 
     const wrappedSave = function wrappedSave(this: MarkdownView, ...args: unknown[]) {
@@ -565,7 +566,11 @@ export class AutoSaveController {
       }
 
       if (shouldHoldSave(this, filePath)) {
-        pendingSaveQueue.schedule(filePath, this);
+        markViewDirty(this);
+        // A save() we suppress is not an edit — Obsidian fires it on editor blur,
+        // on a mode switch, after saveFrontmatter — so it must not push the idle
+        // countdown out. The delay stays "time since the last actual edit".
+        pendingSaveQueue.schedule(filePath, this, false, false);
         dlog("Suppressing non-manual save", { filePath, args });
         return;
       }
@@ -610,6 +615,7 @@ export class AutoSaveController {
     const hasManualSaveRequest = (filePath: string) => this.hasManualSaveRequest(filePath);
     const markManualSaveRequested = (filePath: string) => this.markManualSaveRequested(filePath);
     const shouldHoldSave = (view: TextFileView, filePath: string) => this.shouldHoldSave(view, filePath);
+    const markViewDirty = (view: TextFileView) => this.markViewDirty(view);
     const { discardedViews, pendingSaveQueue } = this;
 
     const wrappedRequestSave = function wrappedRequestSave(this: TextFileView, ...args: unknown[]) {
@@ -639,6 +645,9 @@ export class AutoSaveController {
         return;
       }
 
+      // The original requestSave is what would have set this; we swallow the call
+      // to hold the write, so set the flag ourselves (#43).
+      markViewDirty(this);
       pendingSaveQueue.schedule(filePath, this);
     };
 
@@ -1111,6 +1120,11 @@ export class AutoSaveController {
 
     view.setViewData(pendingData, false);
     view.data = pendingData;
+    // The restored buffer differs from what is on disk, and the requestSave that
+    // setViewData triggers is suppressed while restoring — so mark the view dirty
+    // here, or an external write to this note would overwrite the restored edits
+    // instead of merging with them (#43).
+    this.markViewDirty(view);
     this.pendingSaveQueue.touchView(filePath, view);
     this.markPendingDataRestoreFinished(filePath);
   }
@@ -1305,6 +1319,30 @@ export class AutoSaveController {
     }
 
     return textFileView.data !== currentData;
+  }
+
+  // Keep Obsidian's own "this view has unsaved changes" flag truthful while we
+  // hold the write back (issue #43).
+  //
+  // TextFileView sets `dirty` inside its own requestSave, and that flag is the
+  // only gate on the merge in TextFileView.loadFileInternal: when the file
+  // changes on disk under an open view, a dirty view gets its editor text merged
+  // with the new disk content, while a "clean" one is simply overwritten with it.
+  // Holding a save means never calling the original requestSave, so the flag
+  // stayed false and any plugin writing the file directly (frontmatter-modified-
+  // date's processFrontMatter, Linter, Templater, a sync client, …) silently wiped
+  // every held edit out of the editor — and the next flush then wrote that wiped
+  // version to disk.
+  //
+  // `dirty` is not part of the public API, so only ever touch a flag that is
+  // actually there and already a boolean.
+  private markViewDirty(view: TextFileView): void {
+    const dirtyTrackingView = view as TextFileView & { dirty?: boolean };
+    if (typeof dirtyTrackingView.dirty !== "boolean") {
+      return;
+    }
+
+    dirtyTrackingView.dirty = true;
   }
 
   private markManualSaveRequested(filePath: string): void {

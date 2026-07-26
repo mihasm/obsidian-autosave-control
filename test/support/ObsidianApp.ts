@@ -707,6 +707,18 @@ class ObsidianApp {
     await browser.keys(Array.from(text));
   }
 
+  // Blurring the editor makes Obsidian call MarkdownView.saveImmediately(), which
+  // saves whenever the view is dirty. Since the plugin now keeps that flag
+  // truthful (#43), a blur reaches the wrapped save() — and must not restart the
+  // idle countdown, because clicking away is not an edit.
+  async blurEditor() {
+    await browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      app.workspace.activeLeaf?.view?.editor?.blur?.();
+      (activeDocument.activeElement as HTMLElement | null)?.blur?.();
+    });
+  }
+
   async pressKey(key: string, count = 1) {
     await this.focusEditor();
     for (let i = 0; i < count; i += 1) {
@@ -945,6 +957,40 @@ class ObsidianApp {
         view.data = value;
       }
     }, data);
+  }
+
+  // Rewrite a note's frontmatter the way a third-party plugin does it
+  // (frontmatter-modified-date, Linter, Templater, …): fileManager.processFrontMatter
+  // reads the file FROM DISK, edits the parsed frontmatter and writes it back,
+  // completely bypassing whatever an open editor is holding (issue #43).
+  async setFrontmatterPropertyExternally(notePath: string, property: string, value: string) {
+    await browser.execute(async (nextNotePath: string, nextProperty: string, nextValue: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      const file = app.vault.getAbstractFileByPath(nextNotePath);
+
+      if (!file) {
+        throw new Error(`Note '${nextNotePath}' does not exist.`);
+      }
+
+      await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+        frontmatter[nextProperty] = nextValue;
+      });
+    }, notePath, property, value);
+  }
+
+  async waitForVaultFileContaining(notePath: string, expectedSubstrings: string[], timeout = 10000) {
+    await browser.waitUntil(async () => {
+      try {
+        const fileContent = await this.readVaultFile(notePath);
+        return expectedSubstrings.every((expectedSubstring) => fileContent.includes(expectedSubstring));
+      } catch {
+        return false;
+      }
+    }, {
+      timeout,
+      interval: 200,
+      timeoutMsg: `Vault file '${notePath}' never contained ${JSON.stringify(expectedSubstrings)}.`,
+    });
   }
 
   async getVaultBasePath() {
