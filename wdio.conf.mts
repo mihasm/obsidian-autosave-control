@@ -12,7 +12,13 @@ export const config = {
       browserVersion: "latest",
       "wdio:obsidianOptions": {
         installerVersion: "latest",
-        plugins: ["."],
+        // Installed but off; only the #44 tests switch them on (Custom
+        // Attachment Location requires Advanced Rename and Delete Handler).
+        plugins: [
+          ".",
+          { repo: "mnaoumov/obsidian-advanced-rename-and-delete-handler", enabled: false },
+          { repo: "mnaoumov/obsidian-custom-attachment-location", enabled: false },
+        ],
         vault: "test/vaults/simple",
       },
     },

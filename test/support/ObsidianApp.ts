@@ -978,6 +978,69 @@ class ObsidianApp {
     }, notePath, property, value);
   }
 
+  // Custom Attachment Location needs Advanced Rename and Delete Handler and does
+  // nothing without it. Both are installed disabled by wdio.conf.mts.
+  async enableCustomAttachmentLocation(generatedAttachmentFileName: string) {
+    await browser.execute(async (fileNameTemplate: string) => {
+      const app = (window as typeof window & { app: any }).app;
+      await app.vault.adapter.write(
+        ".obsidian/plugins/obsidian-custom-attachment-location/data.json",
+        JSON.stringify({ generatedAttachmentFileName: fileNameTemplate }),
+      );
+      await app.plugins.enablePlugin("advanced-rename-and-delete-handler");
+      await app.plugins.enablePlugin("obsidian-custom-attachment-location");
+    }, generatedAttachmentFileName);
+  }
+
+  async disableCustomAttachmentLocation() {
+    await browser.execute(async () => {
+      const app = (window as typeof window & { app: any }).app;
+      await app.plugins.disablePlugin("obsidian-custom-attachment-location");
+      await app.plugins.disablePlugin("advanced-rename-and-delete-handler");
+    });
+  }
+
+  // Pastes a 1x1 PNG at the cursor the way a screenshot paste arrives, and
+  // returns the path of the attachment Obsidian created for it.
+  async pasteImageIntoActiveEditor() {
+    const existingAttachments = await this.listVaultAttachmentPaths();
+    await browser.execute(() => {
+      const content = activeDocument.querySelector(".workspace-leaf.mod-active .cm-content");
+      if (!content) {
+        throw new Error("Active editor not found.");
+      }
+
+      const pngBytes = Uint8Array.from(
+        atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="),
+        (character) => character.charCodeAt(0),
+      );
+      const clipboardData = new DataTransfer();
+      clipboardData.items.add(new File([pngBytes], "image.png", { type: "image/png" }));
+      content.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }));
+    });
+
+    let createdAttachment: string | undefined;
+    await browser.waitUntil(async () => {
+      createdAttachment = (await this.listVaultAttachmentPaths())
+        .find((attachmentPath) => !existingAttachments.includes(attachmentPath));
+      return createdAttachment !== undefined;
+    }, {
+      timeout: 10000,
+      timeoutMsg: "Pasted image was not stored as an attachment in time.",
+    });
+
+    return createdAttachment as string;
+  }
+
+  async listVaultAttachmentPaths(): Promise<string[]> {
+    return browser.execute(() => {
+      const app = (window as typeof window & { app: any }).app;
+      return app.vault.getFiles()
+        .map((file: { path: string }) => file.path)
+        .filter((filePath: string) => filePath.endsWith(".png"));
+    });
+  }
+
   async waitForVaultFileContaining(notePath: string, expectedSubstrings: string[], timeout = 10000) {
     await browser.waitUntil(async () => {
       try {

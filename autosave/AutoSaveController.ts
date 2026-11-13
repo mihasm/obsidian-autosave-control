@@ -106,6 +106,34 @@ function callWithArgs<TThis, TArgs extends unknown[], TResult>(
   return (fn.bind(thisArg) as (...boundArgs: TArgs) => TResult)(...args);
 }
 
+// Obsidian evaluates every community plugin with `//# sourceURL=plugin:<id>`, so
+// a stack frame running plugin code names it — `at saveNote
+// (plugin:obsidian-custom-attachment-location:784:8179)` in V8,
+// `saveNote@plugin:…:784:8179` in WebKit. Core code shows up as app.js.
+const PLUGIN_STACK_FRAME_PATTERN = /plugin:([^:\s()]+):\d+:\d+/u;
+
+// The id of the plugin whose code made the call this stack was captured in, or
+// null when the nearest frame outside our own plugin is not plugin code
+// (Obsidian itself, the console, a test harness).
+function findCallingPluginId(stack: string | undefined, ownPluginId: string): string | null {
+  for (const line of (stack ?? "").split("\n")) {
+    const isFrame = /^\s*at\s/u.test(line) || line.includes("@");
+    if (!isFrame) {
+      continue;
+    }
+
+    const match = PLUGIN_STACK_FRAME_PATTERN.exec(line);
+    const pluginId = match ? decodeURIComponent(match[1]) : null;
+    if (pluginId === ownPluginId) {
+      continue;
+    }
+
+    return pluginId;
+  }
+
+  return null;
+}
+
 function hasRequestSave(value: unknown): value is TextFileView {
   return typeof value === "object"
     && value !== null
@@ -184,7 +212,11 @@ export class AutoSaveController {
   // re-arm it after the user picks "keep editing" (issue #26 close dialog).
   private obsidianOnBeforeUnload: ((event: BeforeUnloadEvent) => unknown) | null = null;
 
-  constructor(private readonly app: App, private readonly getSettings: () => AutoSaveControlSettings) {
+  constructor(
+    private readonly app: App,
+    private readonly getSettings: () => AutoSaveControlSettings,
+    private readonly ownPluginId: string,
+  ) {
     this.editActivityTracker = new EditActivityTracker(
       () => this.app.workspace.getActiveViewOfType(MarkdownView),
       (view, filePath) => {
@@ -554,6 +586,9 @@ export class AutoSaveController {
     const captureCurrentViewData = (filePath: string, view: TextFileView) => this.captureCurrentViewData(filePath, view);
     const shouldHoldSave = (view: TextFileView, filePath: string) => this.shouldHoldSave(view, filePath);
     const markViewDirty = (view: TextFileView) => this.markViewDirty(view);
+    const getCallingPluginId = (stack: string | undefined) => findCallingPluginId(stack, this.ownPluginId);
+    const flushPendingSaveForExternalReader = (filePath: string, reason: string) =>
+      this.flushPendingSaveForExternalReader(filePath, reason);
     const { discardedViews, pendingSaveQueue, workspaceLayoutSaveController } = this;
 
     const wrappedSave = function wrappedSave(this: MarkdownView, ...args: unknown[]) {
@@ -591,6 +626,20 @@ export class AutoSaveController {
         // on a mode switch, after saveFrontmatter — so it must not push the idle
         // countdown out. The delay stays "time since the last actual edit".
         pendingSaveQueue.schedule(filePath, this, false, false);
+
+        // Another plugin calling save() itself is asking for the note on disk
+        // right now, nearly always to read it back: Custom Attachment Location's
+        // getCacheSafe saves the note and then reads the metadata cache for the
+        // {{heading}} above the cursor (#44). Swallowing that call hands it the
+        // last saved note instead of the one on screen. Native Obsidian writes on
+        // such a call, so in delayed mode we do too, through the same flush as
+        // vault.process (#43). Obsidian's own save() calls — blur, a mode switch,
+        // the properties editor — come from app.js and stay held.
+        const callingPluginId = getCallingPluginId(new Error().stack);
+        if (callingPluginId) {
+          return flushPendingSaveForExternalReader(filePath, `save() called by ${callingPluginId}`);
+        }
+
         dlog("Suppressing non-manual save", { filePath, args });
         return;
       }
@@ -820,13 +869,13 @@ export class AutoSaveController {
   // result already contains their edits.
   private createProcessWrapper(originalProcess: ProcessFileFn): ProcessFileFn {
     const getTargetFilePathFromFileArgs = (args: unknown[]) => this.getTargetFilePathFromFileArgs(args);
-    const flushPendingSaveBeforeExternalProcess = (filePath: string) =>
-      this.flushPendingSaveBeforeExternalProcess(filePath);
+    const flushPendingSaveForExternalReader = (filePath: string, reason: string) =>
+      this.flushPendingSaveForExternalReader(filePath, reason);
 
     const wrappedProcess = async function wrappedProcess(this: unknown, ...args: unknown[]) {
       const filePath = getTargetFilePathFromFileArgs(args);
       if (filePath) {
-        await flushPendingSaveBeforeExternalProcess(filePath);
+        await flushPendingSaveForExternalReader(filePath, "vault.process");
       }
 
       return callWithArgs(originalProcess, this, ...args);
@@ -835,10 +884,13 @@ export class AutoSaveController {
     return this.markWrappedFunction(wrappedProcess, originalProcess);
   }
 
-  private async flushPendingSaveBeforeExternalProcess(filePath: string): Promise<void> {
+  // Brings a held save forward for another plugin that is about to read the note
+  // from disk: its vault.process (#43) or its own view.save() (#44).
+  private async flushPendingSaveForExternalReader(filePath: string, reason: string): Promise<void> {
     // Manual-only mode promises that nothing is ever written without an explicit
     // save, and that outranks the convenience of a clean read here: a held note
-    // stays held and falls back to Obsidian's merge (which the #43 fix restored).
+    // stays held, a vault.process falls back to Obsidian's merge (which the #43
+    // fix restored) and a plugin that saves to read gets the last saved note.
     // In delayed mode the write is due within the delay anyway, so bringing it
     // forward costs nothing and keeps the caller's read coherent.
     if (this.getSettings().disableAutoSave) {
@@ -849,7 +901,7 @@ export class AutoSaveController {
       return;
     }
 
-    dlog("Flushing pending save before an external vault.process read", { filePath });
+    dlog("Flushing pending save for another plugin's read", { filePath, reason });
     // Our own flush writes through view.save() / vault.modify, never through
     // vault.process, so this cannot recurse into the wrapper; flush() also guards
     // re-entrancy per path.

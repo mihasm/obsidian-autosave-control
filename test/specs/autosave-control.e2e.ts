@@ -10,6 +10,15 @@ const EXTERNAL_WRITE_SAVE_DELAY_SECONDS = 8;
 // Long enough to blur mid-countdown and still tell "kept the deadline" apart from
 // "restarted the delay" without a knife-edge timing margin.
 const BLUR_DEADLINE_SAVE_DELAY_SECONDS = 6;
+// The reporter's settings for #44: delay long enough that nothing is saved on
+// its own while the test pastes, and Custom Attachment Location's file name
+// template with the {{heading}} token in front of its default.
+const ATTACHMENT_PASTE_SAVE_DELAY_SECONDS = 10;
+const HEADING_ATTACHMENT_FILE_NAME = "{{heading}} file-{{date:{momentJsFormat:'YYYYMMDDHHmmssSSS'}}}";
+
+function attachmentFileName(attachmentPath: string) {
+  return attachmentPath.split("/").pop() ?? attachmentPath;
+}
 
 async function enableDelayedAutosave(saveDelaySeconds = SHORT_DELAY_SECONDS) {
   await ObsidianApp.setPluginSettings({
@@ -1355,7 +1364,7 @@ describe("Autosave Control manual scenarios", () => {
     await ObsidianApp.waitForPendingStatus();
   });
 
-  it("blocks a plugin-triggered save before typing when the note is already dirty", async () => {
+  it("blocks a programmatic save from outside any plugin before typing when the note is already dirty", async () => {
     const notePath = "regressions/programmatic-save.md";
 
     await enableDelayedAutosave();
@@ -1508,5 +1517,73 @@ describe("Autosave Control manual scenarios", () => {
       typedText,
       (BLUR_DEADLINE_SAVE_DELAY_SECONDS / 2) * 1000 + 2500,
     );
+  });
+
+  // Issue #44: Custom Attachment Location names a pasted image after the heading
+  // above the cursor. It saves the note itself (view.save()) and then reads the
+  // headings from the metadata cache, which Obsidian builds from the file on
+  // disk. Holding that save left the cache on the last saved note, so a heading
+  // added or renamed since was ignored.
+  it("names a pasted attachment after an unsaved heading with Custom Attachment Location (issue #44)", async () => {
+    const notePath = "regressions/issue-44-heading-attachment.md";
+
+    await enableDelayedAutosave(ATTACHMENT_PASTE_SAVE_DELAY_SECONDS);
+    await ObsidianApp.enableCustomAttachmentLocation(HEADING_ATTACHMENT_FILE_NAME);
+    try {
+      await ObsidianApp.createAndOpenNote(notePath, "## A\n\n");
+      await expect(attachmentFileName(await ObsidianApp.pasteImageIntoActiveEditor())).toMatch(/^A file-/u);
+
+      // A new heading, pasted under straight away.
+      await ObsidianApp.typeText("\n\n## B\n\n");
+      await ObsidianApp.waitForPendingStatus();
+      await expect(await ObsidianApp.readVaultFile(notePath)).not.toContain("## B");
+      await expect(attachmentFileName(await ObsidianApp.pasteImageIntoActiveEditor())).toMatch(/^B file-/u);
+
+      // A renamed heading.
+      const lines = (await ObsidianApp.getActiveEditorContent() as string).split("\n");
+      const headingLine = lines.indexOf("## B");
+      await ObsidianApp.setCursor(headingLine, "## B".length);
+      await browser.keys(["Backspace", "C"]);
+      await ObsidianApp.waitForPendingStatus();
+      await expect(await ObsidianApp.readVaultFile(notePath)).not.toContain("## C");
+      await ObsidianApp.focusEditor();
+      await expect(attachmentFileName(await ObsidianApp.pasteImageIntoActiveEditor())).toMatch(/^C file-/u);
+
+      // The note was saved for Custom Attachment Location, and the edits after
+      // the last paste still go through the delay as usual.
+      await expect(await ObsidianApp.readVaultFile(notePath)).toContain("## C");
+      await expectSavedAfterDelay(
+        notePath,
+        await ObsidianApp.getActiveEditorContent() as string,
+        (ATTACHMENT_PASTE_SAVE_DELAY_SECONDS + 4) * 1000,
+      );
+    } finally {
+      await ObsidianApp.disableCustomAttachmentLocation();
+    }
+  });
+
+  // Manual-only mode writes nothing on another plugin's behalf, the same rule
+  // as for vault.process (#43): the paste still works, but the note stays
+  // unsaved until the user saves it.
+  it("keeps a note unsaved when Custom Attachment Location saves it in manual-only mode (issue #44)", async () => {
+    const notePath = "regressions/issue-44-heading-attachment-manual.md";
+
+    await enableManualOnlyMode();
+    await ObsidianApp.enableCustomAttachmentLocation(HEADING_ATTACHMENT_FILE_NAME);
+    try {
+      await ObsidianApp.createAndOpenNote(notePath, "## A\n\n");
+      await ObsidianApp.typeText("\n\n## B\n\n");
+      await ObsidianApp.waitForPendingStatus();
+      await ObsidianApp.pasteImageIntoActiveEditor();
+
+      await expect(await ObsidianApp.readVaultFile(notePath)).toBe("## A\n\n");
+      await expect(await ObsidianApp.getPendingStatusCount()).toBe(1);
+
+      await ObsidianApp.runSaveCommand();
+      await ObsidianApp.waitForVaultFileContaining(notePath, ["## B", "![["]);
+      await ObsidianApp.waitForSavedStatus();
+    } finally {
+      await ObsidianApp.disableCustomAttachmentLocation();
+    }
   });
 });

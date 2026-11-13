@@ -21,7 +21,7 @@ export default class AutoSaveControlPlugin extends Plugin {
     this.saveStatusIndicator = new SaveStatusIndicator(this);
     this.saveStatusIndicator.attach();
 
-    this.autosaveController = new AutoSaveController(this.app, () => this.settings);
+    this.autosaveController = new AutoSaveController(this.app, () => this.settings, this.manifest.id);
     this.autosaveController.setPendingSaveCountChangeHandler((pendingSaveCount) => {
       this.saveStatusIndicator.setPendingSaveCount(pendingSaveCount);
     });
